@@ -1,0 +1,363 @@
+version: "2"
+linters:
+  default: none
+  enable:
+    - asciicheck
+    - bidichk
+    - bodyclose
+    - cyclop
+    - dogsled
+    - durationcheck
+    - errcheck
+    - errname
+    - errorlint
+    - exhaustive
+    - forcetypeassert
+    - funlen
+    - gocognit
+    - goconst
+    - gocritic
+    - gocyclo
+    - godot
+    - goprintffuncname
+    - gosec
+    - govet
+    - importas
+    - ineffassign
+    - makezero
+    - misspell
+    - nakedret
+    - nestif
+    - nilerr
+    - nilnil
+    - nlreturn
+    - noctx
+    - nolintlint
+    - prealloc
+    - predeclared
+    - revive
+    - staticcheck
+    - tagliatelle
+    - thelper
+    - unconvert
+    - unparam
+    - unused
+    - usetesting
+    - wastedassign
+    - whitespace
+    - wrapcheck
+    - wsl
+  exclusions:
+    rules:
+      # AWS SQS API requires PascalCase JSON field names.
+      - path: internal/service/sqs/types\.go
+        linters:
+          - tagliatelle
+      # AWS DynamoDB API requires PascalCase JSON field names.
+      - path: internal/service/dynamodb/types\.go
+        linters:
+          - tagliatelle
+      # AWS Secrets Manager API requires PascalCase JSON field names.
+      - path: internal/service/secretsmanager/types\.go
+        linters:
+          - tagliatelle
+      # AWS SNS API requires PascalCase JSON field names.
+      - path: internal/service/sns/types\.go
+        linters:
+          - tagliatelle
+      # AWS Lambda API requires PascalCase JSON field names.
+      - path: internal/service/lambda/types\.go
+        linters:
+          - tagliatelle
+      # AWS SSM API requires PascalCase JSON field names.
+      - path: internal/service/ssm/types\.go
+        linters:
+          - tagliatelle
+      # AWS CloudWatch Logs API requires specific JSON field names.
+      - path: internal/service/cloudwatchlogs/types\.go
+        linters:
+          - tagliatelle
+      # AWS EC2 API requires PascalCase JSON field names.
+      - path: internal/service/ec2/types\.go
+        linters:
+          - tagliatelle
+      # AWS Athena API requires PascalCase JSON field names.
+      - path: internal/service/athena/types\.go
+        linters:
+          - tagliatelle
+      # AWS CodeConnections API requires PascalCase JSON field names.
+      - path: internal/service/codeconnections/types\.go
+        linters:
+          - tagliatelle
+      # AWS KMS API requires PascalCase JSON field names.
+      - path: internal/service/kms/types\.go
+        linters:
+          - tagliatelle
+      # AWS Global Accelerator API requires PascalCase JSON field names.
+      - path: internal/service/globalaccelerator/types\.go
+        linters:
+          - tagliatelle
+      # AWS Cognito API requires PascalCase JSON field names.
+      - path: internal/service/cognito/types\.go
+        linters:
+          - tagliatelle
+      # AWS EventBridge API requires PascalCase JSON field names.
+      - path: internal/service/eventbridge/types\.go
+        linters:
+          - tagliatelle
+      # AWS Kinesis API requires PascalCase JSON field names.
+      - path: internal/service/kinesis/types\.go
+        linters:
+          - tagliatelle
+      # AWS Step Functions API requires PascalCase JSON field names.
+      - path: internal/service/sfn/types\.go
+        linters:
+          - tagliatelle
+      # AWS ECR API requires PascalCase JSON field names.
+      - path: internal/service/ecr/types\.go
+        linters:
+          - tagliatelle
+      # AWS API Gateway API requires PascalCase JSON field names.
+      - path: internal/service/apigateway/types\.go
+        linters:
+          - tagliatelle
+      # AWS SES v2 API requires PascalCase JSON field names.
+      - path: internal/service/sesv2/types\.go
+        linters:
+          - tagliatelle
+      # AWS ACM API requires PascalCase JSON field names.
+      - path: internal/service/acm/types\.go
+        linters:
+          - tagliatelle
+      # AWS Glue API requires PascalCase JSON field names.
+      - path: internal/service/glue/types\.go
+        linters:
+          - tagliatelle
+      # AWS X-Ray API requires PascalCase JSON field names.
+      - path: internal/service/xray/types\.go
+        linters:
+          - tagliatelle
+      # AWS X-Ray segment document uses snake_case field names.
+      - path: internal/service/xray/storage\.go
+        linters:
+          - tagliatelle
+      # AWS Batch API requires specific JSON field names.
+      - path: internal/service/batch/types\.go
+        linters:
+          - tagliatelle
+      # AWS CloudWatch API requires PascalCase JSON field names.
+      - path: internal/service/cloudwatch/types\.go
+        linters:
+          - tagliatelle
+      # AWS Firehose API requires PascalCase JSON field names.
+      - path: internal/service/firehose/types\.go
+        linters:
+          - tagliatelle
+      # AWS AppSync API requires specific JSON field names.
+      - path: internal/service/appsync/types\.go
+        linters:
+          - tagliatelle
+      # AWS RDS API requires PascalCase JSON field names.
+      - path: internal/service/rds/types\.go
+        linters:
+          - tagliatelle
+      # AWS ElastiCache API requires PascalCase JSON field names.
+      - path: internal/service/elasticache/types\.go
+        linters:
+          - tagliatelle
+      # AWS ELBv2 API requires PascalCase JSON field names.
+      - path: internal/service/elbv2/types\.go
+        linters:
+          - tagliatelle
+      # AWS CloudFormation API requires PascalCase JSON field names.
+      - path: internal/service/cloudformation/types\.go
+        linters:
+          - tagliatelle
+      # AWS CloudTrail API requires PascalCase JSON field names.
+      - path: internal/service/cloudtrail/types\.go
+        linters:
+          - tagliatelle
+      # AWS Config API requires PascalCase JSON field names.
+      - path: internal/service/configservice/types\.go
+        linters:
+          - tagliatelle
+      # AWS Forecast API requires PascalCase JSON field names.
+      - path: internal/service/forecast/types\.go
+        linters:
+          - tagliatelle
+      # AWS GameLift API requires PascalCase JSON field names.
+      - path: internal/service/gamelift/types\.go
+        linters:
+          - tagliatelle
+      # AWS Service Quotas API requires PascalCase JSON field names.
+      - path: internal/service/servicequotas/types\.go
+        linters:
+          - tagliatelle
+      # AWS Organizations API requires PascalCase JSON field names.
+      - path: internal/service/organizations/types\.go
+        linters:
+          - tagliatelle
+      # AWS EventBridge Pipes API requires PascalCase JSON field names and specific naming.
+      - path: internal/service/pipes/types\.go
+        linters:
+          - tagliatelle
+          - revive
+      # AWS EMR Serverless API requires PascalCase JSON field names.
+      - path: internal/service/emrserverless/types\.go
+        linters:
+          - tagliatelle
+      # AWS App Mesh API requires PascalCase JSON field names.
+      - path: internal/service/appmesh/types\.go
+        linters:
+          - tagliatelle
+      # AWS EventBridge Scheduler API requires PascalCase JSON field names.
+      - path: internal/service/scheduler/types\.go
+        linters:
+          - tagliatelle
+      # AWS DLM API requires PascalCase JSON field names.
+      - path: internal/service/dlm/types\.go
+        linters:
+          - tagliatelle
+      # AWS SageMaker API requires PascalCase JSON field names.
+      - path: internal/service/sagemaker/types\.go
+        linters:
+          - tagliatelle
+      # AWS Route 53 Resolver API requires PascalCase JSON field names.
+      - path: internal/service/route53resolver/types\.go
+        linters:
+          - tagliatelle
+      # AWS Security Lake API requires specific JSON field names.
+      - path: internal/service/securitylake/types\.go
+        linters:
+          - tagliatelle
+      # AWS FinSpace API requires specific JSON field names.
+      - path: internal/service/finspace/types\.go
+        linters:
+          - tagliatelle
+      # AWS Comprehend API requires PascalCase JSON field names.
+      - path: internal/service/comprehend/types\.go
+        linters:
+          - tagliatelle
+      # AWS Resilience Hub API requires specific JSON field names.
+      - path: internal/service/resiliencehub/types\.go
+        linters:
+          - tagliatelle
+      # AWS Cost Explorer API requires PascalCase JSON field names.
+      - path: internal/service/ce/types\.go
+        linters:
+          - tagliatelle
+      # AWS Rekognition API requires PascalCase JSON field names.
+      - path: internal/service/rekognition/types\.go
+        linters:
+          - tagliatelle
+      # AWS MemoryDB API requires PascalCase JSON field names.
+      - path: internal/service/memorydb/types\.go
+        linters:
+          - tagliatelle
+      # AWS Glacier API requires PascalCase JSON field names.
+      - path: internal/service/glacier/types\.go
+        linters:
+          - tagliatelle
+      # AWS Elastic Beanstalk API requires PascalCase JSON field names.
+      - path: internal/service/elasticbeanstalk/types\.go
+        linters:
+          - tagliatelle
+      # AWS EBS API requires PascalCase JSON field names.
+      - path: internal/service/ebs/types\.go
+        linters:
+          - tagliatelle
+      # AWS STS API requires PascalCase JSON field names.
+      - path: internal/service/sts/types\.go
+        linters:
+          - tagliatelle
+      # AWS Backup API requires PascalCase JSON field names.
+      - path: internal/service/backup/types\.go
+        linters:
+          - tagliatelle
+      # AWS Data Exchange API requires PascalCase JSON field names.
+      - path: internal/service/dataexchange/types\.go
+        linters:
+          - tagliatelle
+      # AWS CodeGuru Reviewer API requires PascalCase JSON field names.
+      - path: internal/service/codegurureviewer/types\.go
+        linters:
+          - tagliatelle
+      # AWS Location Service API requires PascalCase JSON field names.
+      - path: internal/service/location/types\.go
+        linters:
+          - tagliatelle
+      # AWS Neptune API requires PascalCase JSON field names.
+      - path: internal/service/neptune/types\.go
+        linters:
+          - tagliatelle
+      # AWS DocumentDB API requires PascalCase JSON field names.
+      - path: internal/service/documentdb/types\.go
+        linters:
+          - tagliatelle
+      # AWS Redshift API requires PascalCase JSON field names.
+      - path: internal/service/redshift/types\.go
+        linters:
+          - tagliatelle
+      # AWS Cloud Control API + per-resource handlers use PascalCase
+      # JSON field names that match AWS CloudFormation resource type
+      # schemas. wrapcheck is excluded because handlers thinly proxy
+      # cross-package storage interfaces; wrapping every storage error
+      # adds noise without aiding diagnosis.
+      - path: internal/service/cloudcontrol/.*\.go
+        linters:
+          - tagliatelle
+          - wrapcheck
+      # internal/registry blank-imports every service to register them via
+      # init(); it is the single canonical service list.
+      - path: internal/registry/registry\.go
+        linters:
+          - revive
+  settings:
+    gocritic:
+      enable-all: true
+      disabled-checks:
+        - importShadow
+        - unnamedResult
+    nolintlint:
+      require-specific: true
+      require-explanation: true
+    cyclop:
+      max-complexity: 15
+    revive:
+      rules:
+        - name: blank-imports
+        - name: context-as-argument
+        - name: context-keys-type
+        - name: dot-imports
+        - name: error-return
+        - name: error-strings
+        - name: error-naming
+        - name: exported
+        - name: if-return
+        - name: increment-decrement
+        - name: var-naming
+        - name: var-declaration
+        - name: package-comments
+        - name: range
+        - name: receiver-naming
+        - name: time-naming
+        - name: unexported-return
+        - name: indent-error-flow
+        - name: errorf
+        - name: empty-block
+        - name: superfluous-else
+        - name: unused-parameter
+        - name: unreachable-code
+        - name: redefines-builtin-id
+        - name: bool-literal-in-expr
+formatters:
+  enable:
+    - gofmt
+    - gci
+    - goimports
+  settings:
+    gci:
+      sections:
+        - standard
+        - default
+        - localmodule
