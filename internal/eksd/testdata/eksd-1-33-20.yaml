@@ -1,0 +1,652 @@
+apiVersion: distro.eks.amazonaws.com/v1alpha1
+kind: Release
+metadata:
+  creationTimestamp: null
+  name: kubernetes-1-33-eks-20
+spec:
+  channel: 1-33
+  number: 20
+status:
+  components:
+  - assets:
+    - arch:
+      - amd64
+      - arm64
+      description: csi-resizer container image
+      image:
+        uri: public.ecr.aws/csi-components/csi-resizer:v1.14.0-eksbuild.3
+      name: csi-resizer-image
+      os: linux
+      type: Image
+    gitTag: v1.14.0
+    name: external-resizer
+  - assets:
+    - arch:
+      - arm64
+      archive:
+        sha256: f36bd0aa3fe6f5468e40ad981af7ec09552e0a78507e4c62adb3b78e1050bdf5
+        sha512: 416d4a6ad77e155d5b92a7aa540a549673c9cbbcaba1300c3dbad29a2331fa2f3f5096d3b2e269cd628f9ef1aff3e6762577d0e110097579718df7760df7633c
+        uri: https://distro.eks.amazonaws.com/kubernetes-1-33/releases/20/artifacts/plugins/v1.7.1/cni-plugins-linux-arm64-v1.7.1.tar.gz
+      description: cni-plugins tarball for linux/arm64
+      name: cni-plugins-linux-arm64-v1.7.1.tar.gz
+      os: linux
+      type: Archive
+    - arch:
+      - amd64
+      archive:
+        sha256: 8eb9ffd9d978c7296e706fba0e91402c839c5ba6d8b81d45499d1b6fcba68113
+        sha512: dffdac9d3a322794d6cf8a1e6c5d86d91621882822227d728c831c9c34eb9b3ee8372a6c33ce33dc19a3fd9a774ac97a1d653c3d2560c116c0e216cafaa713b1
+        uri: https://distro.eks.amazonaws.com/kubernetes-1-33/releases/20/artifacts/plugins/v1.7.1/cni-plugins-linux-amd64-v1.7.1.tar.gz
+      description: cni-plugins tarball for linux/amd64
+      name: cni-plugins-linux-amd64-v1.7.1.tar.gz
+      os: linux
+      type: Archive
+    gitTag: v1.7.1
+    name: cni-plugins
+  - assets:
+    - arch:
+      - arm64
+      archive:
+        sha256: a7db77873a7600ce385721e5214246c3f1bc52ef0eff2cdb7c6e0019d19d42b7
+        sha512: 80638d7218f4d0f1922f831922fbb53e543426a723703f4aafbb32e171b12307a514d1dc87f0debf3a180501e37879e728d3f46b837eba714ea7396f42b279d8
+        uri: https://distro.eks.amazonaws.com/kubernetes-1-33/releases/20/artifacts/etcd/v3.5.21/etcd-linux-arm64-v3.5.21.tar.gz
+      description: etcd tarball for linux/arm64
+      name: etcd-linux-arm64-v3.5.21.tar.gz
+      os: linux
+      type: Archive
+    - arch:
+      - amd64
+      archive:
+        sha256: 372d0964895ca326496568bb2cfb7b2e16d36d66df2807a5c4af32aceb83143f
+        sha512: c1061b4ead0019cd45e4a412906a713d9fbf2a0f3ac45e0561a33bc4ec4c95e79c23648cf9a4fdc52c02e4fd788c4c00a152b32724ad044521c5e78c7fa04d66
+        uri: https://distro.eks.amazonaws.com/kubernetes-1-33/releases/20/artifacts/etcd/v3.5.21/etcd-linux-amd64-v3.5.21.tar.gz
+      description: etcd tarball for linux/amd64
+      name: etcd-linux-amd64-v3.5.21.tar.gz
+      os: linux
+      type: Archive
+    - arch:
+      - amd64
+      - arm64
+      description: etcd container image
+      image:
+        imageDigest: sha256:ffcfd5f96a578b09d0482d022538d57d7ef7f69b17aa3c8ccc803232dc8ca354
+        uri: public.ecr.aws/eks-distro/etcd-io/etcd:v3.5.21-eks-1-33-20
+      name: etcd-image
+      os: linux
+      type: Image
+    gitTag: v3.5.21
+    name: etcd
+  - assets:
+    - arch:
+      - amd64
+      - arm64
+      description: csi-provisioner container image
+      image:
+        uri: public.ecr.aws/csi-components/csi-provisioner:v5.3.0-eksbuild.3
+      name: csi-provisioner-image
+      os: linux
+      type: Image
+    gitTag: v5.3.0
+    name: external-provisioner
+  - assets:
+    - arch:
+      - amd64
+      - arm64
+      description: csi-snapshotter container image
+      image:
+        uri: public.ecr.aws/csi-components/csi-snapshotter:v8.3.0-eksbuild.1
+      name: csi-snapshotter-image
+      os: linux
+      type: Image
+    - arch:
+      - amd64
+      - arm64
+      description: snapshot-controller container image
+      image:
+        uri: public.ecr.aws/csi-components/snapshot-controller:v8.3.0-eksbuild.1
+      name: snapshot-controller-image
+      os: linux
+      type: Image
+    gitTag: v8.3.0
+    name: external-snapshotter
+  - assets:
+    - arch:
+      - amd64
+      - arm64
+      description: coredns container image
+      image:
+        imageDigest: sha256:cad4e1a32fb508f04a7d8ae7120a7438207eb51d33d26ef06aa70e8a113dc0ff
+        uri: public.ecr.aws/eks-distro/coredns/coredns:v1.12.4-eks-1-33-20
+      name: coredns-image
+      os: linux
+      type: Image
+    gitTag: v1.12.4
+    name: coredns
+  - assets:
+    - arch:
+      - arm64
+      archive:
+        sha256: d90bcff92a2017b29924b8ad24b00981856b016df758623c2b338086bfdfed11
+        sha512: 84746ff26eddba6c0b9e35202b872830430a7b5071d6cf6e56587ba5feee0a8a1ad63eb9d0bb666ba5ffaaa341079ee1dcd69ddc1da182e910ea0ab4f8270ed7
+        uri: https://distro.eks.amazonaws.com/kubernetes-1-33/releases/20/artifacts/kubernetes/v1.33.5/kubernetes-client-linux-arm64.tar.gz
+      description: Kubernetes client tarball for linux/arm64
+      name: kubernetes-client-linux-arm64.tar.gz
+      os: linux
+      type: Archive
+    - arch:
+      - arm64
+      archive:
+        sha256: 9d2f5bc2169fdefe6c3f1045b36aa065e3183897ab756584ef3545e7f8d5a578
+        sha512: 4dc580c0d309eac5e56bc6cf17964f56e03d04ae58c1518327659c59b3d86c0fd631df2ed79f00eead016cd494d4272107efb593f55b6d5ba2ea59cbc4aadb15
+        uri: https://distro.eks.amazonaws.com/kubernetes-1-33/releases/20/artifacts/kubernetes/v1.33.5/kubernetes-server-linux-arm64.tar.gz
+      description: Kubernetes server tarball for linux/arm64
+      name: kubernetes-server-linux-arm64.tar.gz
+      os: linux
+      type: Archive
+    - arch:
+      - arm64
+      archive:
+        sha256: a2218b1dde51f741edbf43d989374d3895ea2d2504cb4ceb6b8e8a0a0813f964
+        sha512: 7dae499ef4aafce15f4745387c50f0c55d93ff79ca84156b5be07a7a9fad5039077417e980a883a073f248258c22db7de2416572cdd3076804241a869402eb7f
+        uri: https://distro.eks.amazonaws.com/kubernetes-1-33/releases/20/artifacts/kubernetes/v1.33.5/kubernetes-node-linux-arm64.tar.gz
+      description: Kubernetes node tarball for linux/arm64
+      name: kubernetes-node-linux-arm64.tar.gz
+      os: linux
+      type: Archive
+    - arch:
+      - amd64
+      archive:
+        sha256: 3de0f3150ec83c417a2ca5a6e82bbdf21012ae5062c8b59b40763c8141949318
+        sha512: cbf84c353f372cdf90a64bb34c49ef7da2fd5b7553ef42b2f880de13db7c2be994fb730e9a7a193db621afbb470508cfe00d22730f8004bcdae755884bbac7aa
+        uri: https://distro.eks.amazonaws.com/kubernetes-1-33/releases/20/artifacts/kubernetes/v1.33.5/kubernetes-client-linux-amd64.tar.gz
+      description: Kubernetes client tarball for linux/amd64
+      name: kubernetes-client-linux-amd64.tar.gz
+      os: linux
+      type: Archive
+    - arch:
+      - amd64
+      archive:
+        sha256: a9488722a64daedaf089de5a4afe8a17a4b0cf9a2c235ae95885b1876f618b08
+        sha512: 61fd8a794ae74695f397d395325f2c5cc92c1d29887eb9815e31e49cb8ad67e1a106d635bf6f98a79d73698496f28965c39e0aba3f7afaca15c52b6703429955
+        uri: https://distro.eks.amazonaws.com/kubernetes-1-33/releases/20/artifacts/kubernetes/v1.33.5/kubernetes-server-linux-amd64.tar.gz
+      description: Kubernetes server tarball for linux/amd64
+      name: kubernetes-server-linux-amd64.tar.gz
+      os: linux
+      type: Archive
+    - arch:
+      - amd64
+      archive:
+        sha256: 651a094c95a18487e573370d02b555fa4abdab80aee67170383f5d82a0b8e287
+        sha512: d16ccd97fbe5b4b222c428a4f06a91680533a71f46022b710180916e40abbb93402bfe42c50ae7d44934d95764d6df1446b1a815917669cb0e596b71c3e927aa
+        uri: https://distro.eks.amazonaws.com/kubernetes-1-33/releases/20/artifacts/kubernetes/v1.33.5/kubernetes-node-linux-amd64.tar.gz
+      description: Kubernetes node tarball for linux/amd64
+      name: kubernetes-node-linux-amd64.tar.gz
+      os: linux
+      type: Archive
+    - arch:
+      - amd64
+      archive:
+        sha256: 1e32e69b20f9dc05879e18b5f20ae36cf105e11c0378b17c20caf47d8cdeef40
+        sha512: c09c64acbbbd5c60e841c514500c82e8c190f5dbd2625af5bd8dc5bb3253754ccfe1e2d0ab4b41e8fc170f63ecf09005365d041ccc896170c51f9e5edd72eb3a
+        uri: https://distro.eks.amazonaws.com/kubernetes-1-33/releases/20/artifacts/kubernetes/v1.33.5/kubernetes-client-windows-amd64.tar.gz
+      description: Kubernetes client tarball for windows/amd64
+      name: kubernetes-client-windows-amd64.tar.gz
+      os: windows
+      type: Archive
+    - arch:
+      - amd64
+      archive:
+        sha256: 059ec124e6778df6b0e7359213e2e19e35fb0783ddde4cf5a42a45747a1adfd7
+        sha512: 336f5c2ed5ab89d0f5683566e0c3440426af979147b8837db9a42c9ff99fcec65f09296e98ff7e83d9f04da5a254c12e205372220e22cd6a30cced425366ae1b
+        uri: https://distro.eks.amazonaws.com/kubernetes-1-33/releases/20/artifacts/kubernetes/v1.33.5/kubernetes-node-windows-amd64.tar.gz
+      description: Kubernetes node tarball for windows/amd64
+      name: kubernetes-node-windows-amd64.tar.gz
+      os: windows
+      type: Archive
+    - arch:
+      - amd64
+      archive:
+        sha256: 5ad5d015b99d03ce7439344b855d6e9e02c46cabfade56c5f5085654fb6ff47e
+        sha512: a243b8d357d69975e197f54367809cd36a88492fc6ec7b33dc2a267465402df3956b94548c1cd32b6e873b28a5d07ef2f6d9b74623a89f8f0646d3da3605282d
+        uri: https://distro.eks.amazonaws.com/kubernetes-1-33/releases/20/artifacts/kubernetes/v1.33.5/kubernetes-client-darwin-amd64.tar.gz
+      description: Kubernetes client tarball for darwin/amd64
+      name: kubernetes-client-darwin-amd64.tar.gz
+      os: darwin
+      type: Archive
+    - arch:
+      - amd64
+      - arm64
+      description: kube-apiserver container image
+      image:
+        imageDigest: sha256:6a76a3ce00621fdd6d8d57f484d9e9066a9ed09c7e6b59d454872dbc2e266a70
+        uri: public.ecr.aws/eks-distro/kubernetes/kube-apiserver:v1.33.5-eks-1-33-20
+      name: kube-apiserver-image
+      os: linux
+      type: Image
+    - arch:
+      - amd64
+      - arm64
+      description: kube-controller-manager container image
+      image:
+        imageDigest: sha256:6740668a597a24d4d30a2d4de07c22eeaace49ee2332bfec5f8c2e1901266bc9
+        uri: public.ecr.aws/eks-distro/kubernetes/kube-controller-manager:v1.33.5-eks-1-33-20
+      name: kube-controller-manager-image
+      os: linux
+      type: Image
+    - arch:
+      - amd64
+      - arm64
+      description: kube-scheduler container image
+      image:
+        imageDigest: sha256:dee08db065602684465e9b235dbc91cfcf454a67fd1972ffc80d7caf2632c3af
+        uri: public.ecr.aws/eks-distro/kubernetes/kube-scheduler:v1.33.5-eks-1-33-20
+      name: kube-scheduler-image
+      os: linux
+      type: Image
+    - arch:
+      - amd64
+      - arm64
+      description: pause container image
+      image:
+        imageDigest: sha256:ac8d5693b3233e4ab2f000c132770af1f451fd254c2e28837fb13a2f19f7bf6c
+        uri: public.ecr.aws/eks-distro/kubernetes/pause:v1.33.5-eks-1-33-20
+      name: pause-image
+      os: linux
+      type: Image
+    - arch:
+      - arm64
+      archive:
+        sha256: 73683712e578e8de07ab3ce439e54a9ecae0da80c9e57a23ddeb54de2eede8e6
+        sha512: d373638de83e056590039f9be389418b58c34af504219e52e7a0cf485a3a5355d29262678d619f635e6dd7fa1264de78893284e7a09d4723e84cd7248fbb5e27
+        uri: https://distro.eks.amazonaws.com/kubernetes-1-33/releases/20/artifacts/kubernetes/v1.33.5/bin/linux/arm64/kube-apiserver
+      description: kube-apiserver binary for linux/arm64
+      name: bin/linux/arm64/kube-apiserver
+      os: linux
+      type: Archive
+    - arch:
+      - arm64
+      archive:
+        sha256: c1afe543b20b966a29bb303140affd0028a64d56879b199d648bef1be01537b1
+        sha512: 0dc91620b88066e6862121ca619d22210179cdbd0f18380a8d8461bcfebf5efdeaf9a1a1275cf02949d3d61df8a847ae645411e46c0b96cc54e5fd95d44b76d4
+        uri: https://distro.eks.amazonaws.com/kubernetes-1-33/releases/20/artifacts/kubernetes/v1.33.5/bin/linux/arm64/kube-controller-manager
+      description: kube-controller-manager binary for linux/arm64
+      name: bin/linux/arm64/kube-controller-manager
+      os: linux
+      type: Archive
+    - arch:
+      - arm64
+      archive:
+        sha256: c610d02a27db9d45258841ba5c6d8dbbc9f5993ecbc300415a1d183e961bdbe8
+        sha512: 4f9cb49500b0c49ebb2c0eb5fe09bc91c35a4af24e3872a445395f0b35c658ee5c2c006b3b08b4c826a2ad36eebfab16c8845a66e931c5851803de57b3cb82bb
+        uri: https://distro.eks.amazonaws.com/kubernetes-1-33/releases/20/artifacts/kubernetes/v1.33.5/bin/linux/arm64/kube-scheduler
+      description: kube-scheduler binary for linux/arm64
+      name: bin/linux/arm64/kube-scheduler
+      os: linux
+      type: Archive
+    - arch:
+      - arm64
+      archive:
+        sha256: 20af89fee7266276af101e7665bf8b97bfbc40bcbf7fc81bc3ffc47c9d411f7a
+        sha512: 96f0b35447ccebe30ae0927336c243071eaf9d5e0c6f9a4350c4a8aa1928125338a6ad75d03446147e4272c39acf7a739ab2ccb54f4fc045c54d582e29b2f96d
+        uri: https://distro.eks.amazonaws.com/kubernetes-1-33/releases/20/artifacts/kubernetes/v1.33.5/bin/linux/arm64/kubectl
+      description: kubectl binary for linux/arm64
+      name: bin/linux/arm64/kubectl
+      os: linux
+      type: Archive
+    - arch:
+      - arm64
+      archive:
+        sha256: 312865f2b7d23a7eac990399c05d2131db91b035926757c723e67e155d175031
+        sha512: 754649689283d7cc4837f1a9cb74c9e7ecd1540945495c6ceb446841d651dddaa7163b5a1e051e6340a49dd402d3c0f267aec117d8a44403a8c46ccddc704959
+        uri: https://distro.eks.amazonaws.com/kubernetes-1-33/releases/20/artifacts/kubernetes/v1.33.5/bin/linux/arm64/kubelet
+      description: kubelet binary for linux/arm64
+      name: bin/linux/arm64/kubelet
+      os: linux
+      type: Archive
+    - arch:
+      - arm64
+      archive:
+        sha256: 21728bef1235be210012d8080714da7067c782ef0a17d00e0b2ab5a77716eb44
+        sha512: 2b382c602d133b39f4fa5803e018873715781b126693e6d7af41f8786e7a18689682d4ac51fcc1a6b85f795622e39bbc3cbb12290e1b65955e25503022d30122
+        uri: https://distro.eks.amazonaws.com/kubernetes-1-33/releases/20/artifacts/kubernetes/v1.33.5/bin/linux/arm64/kubeadm
+      description: kubeadm binary for linux/arm64
+      name: bin/linux/arm64/kubeadm
+      os: linux
+      type: Archive
+    - arch:
+      - amd64
+      archive:
+        sha256: ab9cf7478a6860aac2b7fd26b9b3773dd4278f9054cd90efbb0ecbd096896c85
+        sha512: 6adffd0c751835211fc49f7027eae35a84f53f63cad9c009b6bb47b0570eb3438189ea326c7b9aab2b489f652ebdcd14af7492bab56208dc1407c63867dd88f5
+        uri: https://distro.eks.amazonaws.com/kubernetes-1-33/releases/20/artifacts/kubernetes/v1.33.5/bin/linux/amd64/kube-apiserver
+      description: kube-apiserver binary for linux/amd64
+      name: bin/linux/amd64/kube-apiserver
+      os: linux
+      type: Archive
+    - arch:
+      - amd64
+      archive:
+        sha256: c32cc6507c841a0c6916d898572542511a7d809a9819dc6766dbfa187b5383e0
+        sha512: 3a8323816bfcfe58ce2dcbcdf3c441388604caba32b2ad1a37ebfc0c3ada083a1f00bbb3efd1d4470c0fee15d663cd9b52cca71674681f04adc43b44d18a2198
+        uri: https://distro.eks.amazonaws.com/kubernetes-1-33/releases/20/artifacts/kubernetes/v1.33.5/bin/linux/amd64/kube-controller-manager
+      description: kube-controller-manager binary for linux/amd64
+      name: bin/linux/amd64/kube-controller-manager
+      os: linux
+      type: Archive
+    - arch:
+      - amd64
+      archive:
+        sha256: 4c373ae745cb9347a2ccf043fd92d789f87b5c018660691c9e5371c6dc6bf22a
+        sha512: 3911164c10970fe1ff07dfd3a3160bb21f834dd3ff08f8e2de5fbe3802b44c4faf6ee72def13e6ea18effb2af01fcfdd7e077e41bf83b20ff222dface64e17c0
+        uri: https://distro.eks.amazonaws.com/kubernetes-1-33/releases/20/artifacts/kubernetes/v1.33.5/bin/linux/amd64/kube-scheduler
+      description: kube-scheduler binary for linux/amd64
+      name: bin/linux/amd64/kube-scheduler
+      os: linux
+      type: Archive
+    - arch:
+      - amd64
+      archive:
+        sha256: d58be3c675f1283ff7b43a42d4c07a4008c914f3160fb2b47f64d9fc58c80e2f
+        sha512: 784c7d311ef665926486a2120ff09b7d9ba788f922424a1a5cd54ac8eb6e9d7b9fbd18e001cc456286834518790991057f6b34a031a6731efd758d59f233f26c
+        uri: https://distro.eks.amazonaws.com/kubernetes-1-33/releases/20/artifacts/kubernetes/v1.33.5/bin/linux/amd64/kubectl
+      description: kubectl binary for linux/amd64
+      name: bin/linux/amd64/kubectl
+      os: linux
+      type: Archive
+    - arch:
+      - amd64
+      archive:
+        sha256: 1aadbed5f0ffa51a60709e5d32bbc8d356776833fa0ca19db72bd5e55c2bee0d
+        sha512: 9932fce001f54829202c1ecbf9167ed205e916277b75d8e592e1a9f5e8f3d2424fe2c675f11be3941e714430ab7b8afde9c82c12545ef119c8b4af9845caa646
+        uri: https://distro.eks.amazonaws.com/kubernetes-1-33/releases/20/artifacts/kubernetes/v1.33.5/bin/linux/amd64/kubelet
+      description: kubelet binary for linux/amd64
+      name: bin/linux/amd64/kubelet
+      os: linux
+      type: Archive
+    - arch:
+      - amd64
+      archive:
+        sha256: 093f005236d17d672c7b659c4e5f096d87eeb79f7ac3656bfff76df1fedfe4ec
+        sha512: 51a57bd96afe6e3acd34a42e970eaad6ccb4c38a0cd7f2152bd3e60bd309b0767cb8720824b859dfbddbd574ce93918cafc2e7c6ce06729d9ee3077cbf80c723
+        uri: https://distro.eks.amazonaws.com/kubernetes-1-33/releases/20/artifacts/kubernetes/v1.33.5/bin/linux/amd64/kubeadm
+      description: kubeadm binary for linux/amd64
+      name: bin/linux/amd64/kubeadm
+      os: linux
+      type: Archive
+    - arch:
+      - amd64
+      archive:
+        sha256: 19e254ea46966d383e1fc8f46980b09e88e29e82aaa1b20a4b55bec9a548aab7
+        sha512: ebbc4b8d91aa88e801594f3e03304823934f2a656025960ae9b2ecf28e5e54ca4d9d968215bda33fcb3d5d7fee7a95793669af7749f5ba3f8e383d5ab02f0178
+        uri: https://distro.eks.amazonaws.com/kubernetes-1-33/releases/20/artifacts/kubernetes/v1.33.5/bin/windows/amd64/kubeadm.exe
+      description: kubeadm.exe binary for windows/amd64
+      name: bin/windows/amd64/kubeadm.exe
+      os: windows
+      type: Archive
+    - arch:
+      - amd64
+      archive:
+        sha256: 7018a896598df2d5c7cb4758491d40750dd038f93a9a81b5942cbee2e33cb247
+        sha512: 414299260bc0fa1866a8205d7d42268a7a0ba178e5bdb37271ff5a3f673a6d4ab9adf21462c69486891de3fc2b61a0596b2d2d840be168c6dc6786c20a158c34
+        uri: https://distro.eks.amazonaws.com/kubernetes-1-33/releases/20/artifacts/kubernetes/v1.33.5/bin/windows/amd64/kubectl.exe
+      description: kubectl.exe binary for windows/amd64
+      name: bin/windows/amd64/kubectl.exe
+      os: windows
+      type: Archive
+    - arch:
+      - amd64
+      archive:
+        sha256: d7651caad078680848cad108bf63847326aa0ebf7628b00e76d9f909c6fde614
+        sha512: 1ea4fe0bbe37c6025604eaeb7c33fb642a6e704f85166b52685a22a5d006ddbfcca12406370f093c84a4e1feca3f778ba9cd97d911f1581288a3537c30730a84
+        uri: https://distro.eks.amazonaws.com/kubernetes-1-33/releases/20/artifacts/kubernetes/v1.33.5/bin/windows/amd64/kubelet.exe
+      description: kubelet.exe binary for windows/amd64
+      name: bin/windows/amd64/kubelet.exe
+      os: windows
+      type: Archive
+    - arch:
+      - amd64
+      archive:
+        sha256: baaeaa83715a793c40c19a464b25fc1d2f32acd18a926e04186dca6c7985ab36
+        sha512: a99cf0439f2f451753c294aa81a3f67b0b80fe6ac587b959bfa174e620497d34177cd309d22b4c12a29d61479abb491005bf217128b90123fefb74d5f6f26ec2
+        uri: https://distro.eks.amazonaws.com/kubernetes-1-33/releases/20/artifacts/kubernetes/v1.33.5/bin/darwin/amd64/kubectl
+      description: kubectl binary for darwin/amd64
+      name: bin/darwin/amd64/kubectl
+      os: darwin
+      type: Archive
+    - arch:
+      - amd64
+      archive:
+        sha256: 4492e451a6db687d34db0794013b837fadf54d0f73269ae3fe2feb7c6fbc7771
+        sha512: 9b3ff28ec551d906c11349af4d4b49c43e049048cdb9d16f0fa50912ab360b3886fdf652ff6a254ee7f3e4e7f24fbb2713e924ffa1c45be8b84714a006e5ba35
+        uri: https://distro.eks.amazonaws.com/kubernetes-1-33/releases/20/artifacts/kubernetes/v1.33.5/bin/linux/amd64/kube-apiserver.tar
+      description: kube-apiserver linux/amd64 OCI image tar
+      name: bin/linux/amd64/kube-apiserver.tar
+      os: linux
+      type: Archive
+    - arch:
+      - arm64
+      archive:
+        sha256: acc624784a0b5c8a6b9296a4dfb67a2cb41f2591c86f50103105e2c8e11c49b8
+        sha512: 1403c18ffbc48ff47e66aa41c0278a0e993226a7c9445892f699cc72680e68b3dedec458e0087f62b377e8e8375eef81f0f39913bf06a7e335fd63f3123bc705
+        uri: https://distro.eks.amazonaws.com/kubernetes-1-33/releases/20/artifacts/kubernetes/v1.33.5/bin/linux/arm64/kube-apiserver.tar
+      description: kube-apiserver linux/arm64 OCI image tar
+      name: bin/linux/arm64/kube-apiserver.tar
+      os: linux
+      type: Archive
+    - arch:
+      - amd64
+      archive:
+        sha256: 1eb43f9d503351156a89f7ca052fee17e7b65839214567fc7aee3df2a94545eb
+        sha512: d39324fd6b273c106d60586520e01f65f176f3bf837bd2562a80548d690eb1b717906d1ad2ac059312d433413109b0746082ced15c4f30565ffa2e919dec39f1
+        uri: https://distro.eks.amazonaws.com/kubernetes-1-33/releases/20/artifacts/kubernetes/v1.33.5/bin/linux/amd64/kube-controller-manager.tar
+      description: kube-controller-manager linux/amd64 OCI image tar
+      name: bin/linux/amd64/kube-controller-manager.tar
+      os: linux
+      type: Archive
+    - arch:
+      - arm64
+      archive:
+        sha256: 52c47541d7c5f9730900f53962f5e0d18ca46417172e66d6b39d41601d0b7d1b
+        sha512: 49f1984db6b2f63d50ef924f2c04cedf821420d04bc10c2040e087c4143cdeecfbcff0437530fa47f4426f0982e45e55a5339b8da4903e4667e0c91c267a948a
+        uri: https://distro.eks.amazonaws.com/kubernetes-1-33/releases/20/artifacts/kubernetes/v1.33.5/bin/linux/arm64/kube-controller-manager.tar
+      description: kube-controller-manager linux/arm64 OCI image tar
+      name: bin/linux/arm64/kube-controller-manager.tar
+      os: linux
+      type: Archive
+    - arch:
+      - amd64
+      archive:
+        sha256: 7af6a5a91a32520fdfa7e403c6ddc938624456ec73c7ce8bcd4e39978dca9a62
+        sha512: 1288e63e2702f7061b281eae956dd38f38865cc0a76743de41833018a2b74c16a72d99f8f5db9a9d393999e853a2c35c56317367f6ca3b49d17d89284f5aa33b
+        uri: https://distro.eks.amazonaws.com/kubernetes-1-33/releases/20/artifacts/kubernetes/v1.33.5/bin/linux/amd64/kube-scheduler.tar
+      description: kube-scheduler linux/amd64 OCI image tar
+      name: bin/linux/amd64/kube-scheduler.tar
+      os: linux
+      type: Archive
+    - arch:
+      - arm64
+      archive:
+        sha256: cf2f741ad77be3041714102ccde7cc531bf07fc7b4bd65f41861e8321866cdda
+        sha512: b814dc721242473d40093a1b426e548882e292417b46f4d305fb52e18c005e54e4e4fe2d27600993696b25b590356673cfc96da2678d954347c798e996efab86
+        uri: https://distro.eks.amazonaws.com/kubernetes-1-33/releases/20/artifacts/kubernetes/v1.33.5/bin/linux/arm64/kube-scheduler.tar
+      description: kube-scheduler linux/arm64 OCI image tar
+      name: bin/linux/arm64/kube-scheduler.tar
+      os: linux
+      type: Archive
+    - archive:
+        sha256: c2c85659eb017a7676ffa85a1dbfb0d108b0163ff344aee901fa655d83db8b4e
+        sha512: 3c62f1f37204bb414be75cd932443d3b0261327a98f0b562cb331a0b2679882c731b02b4a129c1008a14f8fab10b90f63b5f1704608a7ca9472a4c1968a4176b
+        uri: https://distro.eks.amazonaws.com/kubernetes-1-33/releases/20/artifacts/kubernetes/v1.33.5/kubernetes-src.tar.gz
+      description: Kubernetes source tarball
+      name: kubernetes-src.tar.gz
+      type: Archive
+    gitCommit: 3c5499dfff27617eee1a8346db75a318a96eb0b8
+    gitTag: v1.33.5
+    name: kubernetes
+  - assets:
+    - arch:
+      - amd64
+      - arm64
+      description: livenessprobe container image
+      image:
+        uri: public.ecr.aws/csi-components/livenessprobe:v2.16.0-eksbuild.4
+      name: livenessprobe-image
+      os: linux
+      type: Image
+    gitTag: v2.16.0
+    name: livenessprobe
+  - assets:
+    - arch:
+      - amd64
+      - arm64
+      description: csi-node-driver-registrar container image
+      image:
+        uri: public.ecr.aws/csi-components/csi-node-driver-registrar:v2.14.0-eksbuild.4
+      name: csi-node-driver-registrar-image
+      os: linux
+      type: Image
+    gitTag: v2.14.0
+    name: node-driver-registrar
+  - assets:
+    - arch:
+      - arm64
+      archive:
+        sha256: ef74da6d716cc378b5b25e506ebfa94e750e6643139644e023ddce2ddf675c5a
+        sha512: 4eab343b4f7955fcf4706302ead729564f64451ceedc0490d26ca9497fd03d5673d483c85a0c6da261330833d294271a8be0d266900499dfe0add1625308b11a
+        uri: https://distro.eks.amazonaws.com/kubernetes-1-33/releases/20/artifacts/kubernetes/v1.33.5/bin/linux/arm64/kube-proxy
+      description: kube-proxy binary for linux/arm64
+      name: bin/linux/arm64/kube-proxy
+      os: linux
+      type: Archive
+    - arch:
+      - amd64
+      archive:
+        sha256: 3ff549e0fcc616845e8f3de76d7cb997c35306773873e2204ba7b28a96c9de89
+        sha512: 83ef52a8e1a798443bc7b9cc844340eef1b1487f2bdb3a7ef5f649c3fc4e6cf5562067818fd62b0de2951bf4c94b29857689fbe31d1eccea66d50756414a2d44
+        uri: https://distro.eks.amazonaws.com/kubernetes-1-33/releases/20/artifacts/kubernetes/v1.33.5/bin/linux/amd64/kube-proxy
+      description: kube-proxy binary for linux/amd64
+      name: bin/linux/amd64/kube-proxy
+      os: linux
+      type: Archive
+    - arch:
+      - amd64
+      archive:
+        sha256: 9503e3f9fdca2b69f59b71c91eb455cee7f10074dc92cbbd8b03e7cf8a7ae72e
+        sha512: fe97583f660095e6a9a93938e8aaa6c0a3f00f982621db69e3c342c7fbee582906fe55b1d984523e047a6a3f8bfbd77f7c4cc7e4ee4b1fe6f9cf9982c23878eb
+        uri: https://distro.eks.amazonaws.com/kubernetes-1-33/releases/20/artifacts/kubernetes/v1.33.5/bin/windows/amd64/kube-proxy.exe
+      description: kube-proxy binary for windows/amd64
+      name: bin/windows/amd64/kube-proxy.exe
+      os: windows
+      type: Archive
+    - arch:
+      - amd64
+      - arm64
+      description: kube-proxy container image
+      image:
+        imageDigest: sha256:6b51c45b02145cb71c65be5c1e7a1f6de526f2436576d0cc5c9d9e352be76697
+        uri: public.ecr.aws/eks-distro/kubernetes/kube-proxy:v1.33.5-eks-1-33-20
+      name: kube-proxy-image
+      os: linux
+      type: Image
+    - arch:
+      - amd64
+      archive:
+        sha256: 5c277dc2b2de46a19dea79d95c2a5e342af4bec5cd02d858860e7033486bb5ef
+        sha512: ac8d3c2d10510ce1e9f1bf36169008ae3dcd62752447d0da5aefba6631b3858ece600a75c343cb73e1c1a298fed015ad6beba996eec3a163f41dea6dad7b6566
+        uri: https://distro.eks.amazonaws.com/kubernetes-1-33/releases/20/artifacts/kubernetes/v1.33.5/bin/linux/amd64/kube-proxy.tar
+      description: kube-proxy linux/amd64 OCI image tar
+      name: bin/linux/amd64/kube-proxy.tar
+      os: linux
+      type: Archive
+    - arch:
+      - arm64
+      archive:
+        sha256: 1114520075a9ec67ea6c388f2a25c80291482c4722760a9a7cd65ddc7b0e6778
+        sha512: c6310824088751bef5c147e2d366f3257fc474768baa322c5d204c928827c33ff1efb241c9ad8b264721b7f925c6c7ca1965c097798eb5d1db69f4aa7ab8f32a
+        uri: https://distro.eks.amazonaws.com/kubernetes-1-33/releases/20/artifacts/kubernetes/v1.33.5/bin/linux/arm64/kube-proxy.tar
+      description: kube-proxy linux/arm64 OCI image tar
+      name: bin/linux/arm64/kube-proxy.tar
+      os: linux
+      type: Archive
+    gitTag: v1.33.5
+    name: kube-proxy
+  - assets:
+    - arch:
+      - arm64
+      archive:
+        sha256: b6cab7ded5ee18157243a56a5ad337bc2f3672185acb916c22769467acceebbf
+        sha512: 50da6243a1da1aaab6f080e11817c9d0173e591e06e40f6e7e3ca8011217b7c4a3d468d09cf057a61c4caa09692849d2428df1cbb29f6ff751187bb84e7ab61f
+        uri: https://distro.eks.amazonaws.com/kubernetes-1-33/releases/20/artifacts/aws-iam-authenticator/v0.7.8/aws-iam-authenticator-linux-arm64-v0.7.8.tar.gz
+      description: aws-iam-authenticator tarball for linux/arm64
+      name: aws-iam-authenticator-linux-arm64-v0.7.8.tar.gz
+      os: linux
+      type: Archive
+    - arch:
+      - amd64
+      archive:
+        sha256: 2c6195e4ae3c71e3c1848348949b653b28b98dff5f8060566db81079ea3a4463
+        sha512: d2000ab4dd56d9efa8ca6cb3843ff1016d060ad6570532ed1f7f354c1a7c2fe7e4baec1aae57c909ce2a31cdd49e5594ce7be750fee0c6c99d543fc4df05688e
+        uri: https://distro.eks.amazonaws.com/kubernetes-1-33/releases/20/artifacts/aws-iam-authenticator/v0.7.8/aws-iam-authenticator-linux-amd64-v0.7.8.tar.gz
+      description: aws-iam-authenticator tarball for linux/amd64
+      name: aws-iam-authenticator-linux-amd64-v0.7.8.tar.gz
+      os: linux
+      type: Archive
+    - arch:
+      - amd64
+      archive:
+        sha256: f16441ba1eb0b62eefd335340ccd2976d28bdd23fd266e42037a8832f4acc72c
+        sha512: 3495ec287bfe94dde51cb5d802aa9f12542af30eb203701e7fc90792aaee83752c69f71867abcbf2061106f466df1902722ec7115c126bb5632c866f092ebf1d
+        uri: https://distro.eks.amazonaws.com/kubernetes-1-33/releases/20/artifacts/aws-iam-authenticator/v0.7.8/aws-iam-authenticator-windows-amd64-v0.7.8.tar.gz
+      description: aws-iam-authenticator tarball for windows/amd64
+      name: aws-iam-authenticator-windows-amd64-v0.7.8.tar.gz
+      os: windows
+      type: Archive
+    - arch:
+      - amd64
+      archive:
+        sha256: 89cd8a04e04ddbc5355a4e689bc387d43bfa0863e7047ac5358b935976378409
+        sha512: bf5805b352d909eac1c58f0aca54c8430f47a80761207efcbbab6345dea1222b6911c739a5986c8334d1da68dadd0fbf5bc9c6ac7dbaf1d057f452d8065a91a4
+        uri: https://distro.eks.amazonaws.com/kubernetes-1-33/releases/20/artifacts/aws-iam-authenticator/v0.7.8/aws-iam-authenticator-darwin-amd64-v0.7.8.tar.gz
+      description: aws-iam-authenticator tarball for darwin/amd64
+      name: aws-iam-authenticator-darwin-amd64-v0.7.8.tar.gz
+      os: darwin
+      type: Archive
+    - arch:
+      - amd64
+      - arm64
+      description: aws-iam-authenticator container image
+      image:
+        imageDigest: sha256:bce9b0cd79792f26211321070d15629147125dbeb59c746cd84f7d513c2285ee
+        uri: public.ecr.aws/eks-distro/kubernetes-sigs/aws-iam-authenticator:v0.7.8-eks-1-33-20
+      name: aws-iam-authenticator-image
+      os: linux
+      type: Image
+    gitTag: v0.7.8
+    name: aws-iam-authenticator
+  - assets:
+    - arch:
+      - amd64
+      - arm64
+      description: csi-attacher container image
+      image:
+        uri: public.ecr.aws/csi-components/csi-attacher:v4.9.0-eksbuild.3
+      name: csi-attacher-image
+      os: linux
+      type: Image
+    gitTag: v4.9.0
+    name: external-attacher
+  - assets:
+    - arch:
+      - amd64
+      - arm64
+      description: metrics-server container image
+      image:
+        imageDigest: sha256:1d3cae08d3d3d7be5c50a2c7d313f88c100815ce10d83079a55ce9136ed8ab08
+        uri: public.ecr.aws/eks-distro/kubernetes-sigs/metrics-server:v0.7.2-eks-1-32-8
+      name: metrics-server-image
+      os: linux
+      type: Image
+    gitTag: v0.7.2
+    name: metrics-server
+  date: "2025-12-04T21:00:11Z"
+

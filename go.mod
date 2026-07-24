@@ -3,6 +3,11 @@ module github.com/sivchari/fjord
 go 1.25.0
 
 require (
+	sigs.k8s.io/kind v0.32.0
+	sigs.k8s.io/yaml v1.6.0
+)
+
+require (
 	al.essio.dev/pkg/shellescape v1.5.1 // indirect
 	github.com/BurntSushi/toml v1.4.0 // indirect
 	github.com/evanphx/json-patch/v5 v5.6.0 // indirect
@@ -15,6 +20,4 @@ require (
 	go.yaml.in/yaml/v2 v2.4.2 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
 	golang.org/x/sys v0.6.0 // indirect
-	sigs.k8s.io/kind v0.32.0 // indirect
-	sigs.k8s.io/yaml v1.6.0 // indirect
 )
