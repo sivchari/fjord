@@ -1,0 +1,58 @@
+name: EKS-D Watch
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  eksd-watch:
+    name: Check for EKS-D updates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Regenerate EKS-D release table
+        run: make generate
+
+      - name: Check for changes
+        id: diff
+        run: |
+          if git diff --exit-code internal/eksd/generated_table.go; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Summarize changed versions
+        if: steps.diff.outputs.changed == 'true'
+        id: summary
+        run: |
+          {
+            echo "body<<EOF_BODY_${GITHUB_RUN_ID}"
+            git diff internal/eksd/generated_table.go | grep -E '^[+-][[:space:]]+(EKSVersion|Channel|Number|KubeVersion):' || true
+            echo "EOF_BODY_${GITHUB_RUN_ID}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create pull request
+        if: steps.diff.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          add-paths: internal/eksd/generated_table.go
+          commit-message: 'chore: update EKS-D release table'
+          branch: eksd-update
+          title: 'chore: update EKS-D release table'
+          body: |
+            Automated update of the EKS-D release table (`make generate`).
+
+            ```
+            ${{ steps.summary.outputs.body }}
+            ```
