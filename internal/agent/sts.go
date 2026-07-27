@@ -140,11 +140,21 @@ func (s *Server) handleAssumeRoleWithWebIdentity(w http.ResponseWriter, form url
 		return
 	}
 
+	roleUserARN := assumedRoleARN(roleARN, sessionName)
+
+	// Record the session so a GetCallerIdentity signed with these temporary
+	// credentials resolves to the assumed role instead of the account root.
+	s.sessions.put(credentials.AccessKeyID, callerIdentityResult{
+		arn:     roleUserARN,
+		userID:  assumedRoleID,
+		account: AccountID,
+	})
+
 	writeSTSResponse(w, assumeRoleWithWebIdentityResponse{
 		Xmlns:       stsXMLNS,
 		Credentials: *credentials,
 		AssumedRoleUser: stsAssumedRoleUser{
-			Arn:           assumedRoleARN(roleARN, sessionName),
+			Arn:           roleUserARN,
 			AssumedRoleID: assumedRoleID,
 		},
 		RequestID: requestID,
@@ -195,6 +205,12 @@ func (s *Server) callerIdentity(ctx context.Context, form url.Values, header htt
 	accessKeyID, ok := resolveAccessKeyID(form, header)
 	if !ok {
 		return defaultCallerIdentity(), nil
+	}
+
+	// Temporary session credentials (issued by AssumeRoleWithWebIdentity)
+	// resolve to their assumed-role identity, matching IRSA on real EKS.
+	if identity, ok := s.sessions.get(accessKeyID); ok {
+		return &identity, nil
 	}
 
 	principal, err := s.store.GetByAccessKeyID(ctx, accessKeyID)

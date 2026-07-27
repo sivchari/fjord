@@ -29,6 +29,19 @@ const (
 	// agentNodePort is the NodePort fjord-agent's fake STS API is published
 	// on, matching internal/kind.Config's ExtraPortMappings target.
 	agentNodePort = 30080
+
+	// AgentTLSCertName is the Secret fjord-agent's IRSA injector webhook
+	// TLS certificate is stored in and mounted from, when EnsureAgent is
+	// called with enableIRSA true. EnsureIRSA populates its content.
+	AgentTLSCertName = "fjord-agent-tls"
+
+	// agentTLSMountPath is the path fjord-agent's injector TLS certificate
+	// and key are mounted at inside its container.
+	agentTLSMountPath = "/etc/fjord/tls"
+	// agentInjectorPort is the port fjord-agent's IRSA injector webhook
+	// listens on (TLS), matching internal/cluster.EnsureIRSA's
+	// MutatingWebhookConfiguration.
+	agentInjectorPort = 8443
 )
 
 // agentLabels selects fjord-agent's pods, used as both the Deployment's pod
@@ -37,8 +50,11 @@ var agentLabels = map[string]string{"app": agentName}
 
 // EnsureAgent deploys fjord-agent (the fake STS/IMDS/authenticator server)
 // to the kube-system namespace: its RBAC, Deployment, and Services. It is
-// idempotent; repeated calls update the Deployment to run image.
-func EnsureAgent(ctx context.Context, client kubernetes.Interface, image string) error {
+// idempotent; repeated calls update the Deployment to run image. When
+// enableIRSA is true, the Deployment additionally mounts AgentTLSCertName
+// and runs fjord-agent's IRSA injector webhook on agentInjectorPort; callers
+// enabling it must arrange for EnsureIRSA to populate that Secret.
+func EnsureAgent(ctx context.Context, client kubernetes.Interface, image string, enableIRSA bool) error {
 	if err := ensureServiceAccount(ctx, client); err != nil {
 		return err
 	}
@@ -51,11 +67,11 @@ func EnsureAgent(ctx context.Context, client kubernetes.Interface, image string)
 		return err
 	}
 
-	if err := ensureDeployment(ctx, client, image); err != nil {
+	if err := ensureDeployment(ctx, client, image, enableIRSA); err != nil {
 		return err
 	}
 
-	if err := ensureService(ctx, client); err != nil {
+	if err := ensureService(ctx, client, enableIRSA); err != nil {
 		return err
 	}
 
@@ -86,8 +102,10 @@ func ensureServiceAccount(ctx context.Context, client kubernetes.Interface) erro
 
 // ensureClusterRole creates fjord-agent's ClusterRole if it does not already
 // exist, granting it access to the principal registry Secret (and, for
-// later phases, ConfigMaps in the same namespace) plus the ability to
-// create TokenReviews for the authenticator webhook.
+// later phases, ConfigMaps in the same namespace), the ability to create
+// TokenReviews for the authenticator webhook, and read access to
+// ServiceAccounts so its IRSA injector webhook can resolve the
+// eks.amazonaws.com/role-arn annotation.
 func ensureClusterRole(ctx context.Context, client kubernetes.Interface) error {
 	role := &rbacv1.ClusterRole{
 		ObjectMeta: metav1.ObjectMeta{Name: agentName},
@@ -101,6 +119,11 @@ func ensureClusterRole(ctx context.Context, client kubernetes.Interface) error {
 				APIGroups: []string{"authentication.k8s.io"},
 				Resources: []string{"tokenreviews"},
 				Verbs:     []string{"create"},
+			},
+			{
+				APIGroups: []string{""},
+				Resources: []string{"serviceaccounts"},
+				Verbs:     []string{"get"},
 			},
 		},
 	}
@@ -151,8 +174,8 @@ func ensureClusterRoleBinding(ctx context.Context, client kubernetes.Interface) 
 // ensureDeployment creates fjord-agent's Deployment if it does not already
 // exist, or updates it in place (preserving its ResourceVersion) to run
 // image otherwise.
-func ensureDeployment(ctx context.Context, client kubernetes.Interface, image string) error {
-	desired := agentDeployment(image)
+func ensureDeployment(ctx context.Context, client kubernetes.Interface, image string, enableIRSA bool) error {
+	desired := agentDeployment(image, enableIRSA)
 
 	_, err := client.AppsV1().Deployments(agent.SystemNamespace).Create(ctx, desired, metav1.CreateOptions{})
 	if err == nil {
@@ -185,8 +208,41 @@ func ensureDeployment(ctx context.Context, client kubernetes.Interface, image st
 }
 
 // agentDeployment builds the desired fjord-agent Deployment running image.
-func agentDeployment(image string) *appsv1.Deployment {
+// When enableIRSA is true, the pod additionally mounts AgentTLSCertName at
+// agentTLSMountPath and fjord-agent serves its IRSA injector webhook on
+// agentInjectorPort.
+func agentDeployment(image string, enableIRSA bool) *appsv1.Deployment {
 	replicas := int32(1)
+
+	spec := corev1.PodSpec{
+		ServiceAccountName: agentName,
+		Containers: []corev1.Container{
+			{
+				Name:  agentName,
+				Image: image,
+				Args:  agentContainerArgs(enableIRSA),
+				Ports: []corev1.ContainerPort{
+					{Name: "http", ContainerPort: agentPort, Protocol: corev1.ProtocolTCP},
+				},
+			},
+		},
+	}
+
+	if enableIRSA {
+		spec.Containers[0].Ports = append(spec.Containers[0].Ports,
+			corev1.ContainerPort{Name: "injector", ContainerPort: agentInjectorPort, Protocol: corev1.ProtocolTCP})
+		spec.Containers[0].VolumeMounts = []corev1.VolumeMount{
+			{Name: "tls", MountPath: agentTLSMountPath, ReadOnly: true},
+		}
+		spec.Volumes = []corev1.Volume{
+			{
+				Name: "tls",
+				VolumeSource: corev1.VolumeSource{
+					Secret: &corev1.SecretVolumeSource{SecretName: AgentTLSCertName},
+				},
+			},
+		}
+	}
 
 	return &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
@@ -198,27 +254,45 @@ func agentDeployment(image string) *appsv1.Deployment {
 			Selector: &metav1.LabelSelector{MatchLabels: agentLabels},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{Labels: agentLabels},
-				Spec: corev1.PodSpec{
-					ServiceAccountName: agentName,
-					Containers: []corev1.Container{
-						{
-							Name:  agentName,
-							Image: image,
-							Args:  []string{"serve", "api", "--port", fmt.Sprintf("%d", agentPort)},
-							Ports: []corev1.ContainerPort{
-								{Name: "http", ContainerPort: agentPort, Protocol: corev1.ProtocolTCP},
-							},
-						},
-					},
-				},
+				Spec:       spec,
 			},
 		},
 	}
 }
 
+// agentContainerArgs returns fjord-agent's `serve api` container args.
+// enableIRSA true additionally serves the IRSA injector webhook on
+// agentInjectorPort using the certificate mounted at agentTLSMountPath;
+// enableIRSA false passes --injector-port 0, which fjord-agent treats as
+// "do not serve the injector webhook".
+func agentContainerArgs(enableIRSA bool) []string {
+	args := []string{"serve", "api", "--port", fmt.Sprintf("%d", agentPort)}
+
+	if !enableIRSA {
+		return append(args, "--injector-port", "0")
+	}
+
+	return append(args,
+		"--injector-port", fmt.Sprintf("%d", agentInjectorPort),
+		"--tls-cert-file", agentTLSMountPath+"/tls.crt",
+		"--tls-key-file", agentTLSMountPath+"/tls.key",
+	)
+}
+
 // ensureService creates fjord-agent's ClusterIP Service if it does not
-// already exist.
-func ensureService(ctx context.Context, client kubernetes.Interface) error {
+// already exist. When enableIRSA is true, the Service additionally exposes
+// agentInjectorPort for the IRSA injector webhook.
+func ensureService(ctx context.Context, client kubernetes.Interface, enableIRSA bool) error {
+	ports := []corev1.ServicePort{
+		{Name: "http", Port: agentPort, TargetPort: intstr.FromInt32(agentPort)},
+	}
+
+	if enableIRSA {
+		ports = append(ports, corev1.ServicePort{
+			Name: "injector", Port: agentInjectorPort, TargetPort: intstr.FromInt32(agentInjectorPort),
+		})
+	}
+
 	svc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      agentName,
@@ -226,9 +300,7 @@ func ensureService(ctx context.Context, client kubernetes.Interface) error {
 		},
 		Spec: corev1.ServiceSpec{
 			Selector: agentLabels,
-			Ports: []corev1.ServicePort{
-				{Name: "http", Port: agentPort, TargetPort: intstr.FromInt32(agentPort)},
-			},
+			Ports:    ports,
 		},
 	}
 

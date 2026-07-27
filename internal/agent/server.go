@@ -7,12 +7,13 @@ import "net/http"
 // mount the facade and EKS Pod Identity APIs onto additional paths on the
 // same mux.
 type Server struct {
-	store PrincipalStore
+	store    PrincipalStore
+	sessions *sessionStore
 }
 
 // NewServer returns a Server that resolves principals via store.
 func NewServer(store PrincipalStore) *Server {
-	return &Server{store: store}
+	return &Server{store: store, sessions: newSessionStore()}
 }
 
 // Handler returns the http.Handler serving every API this Server mounts.

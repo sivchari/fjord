@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"encoding/xml"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,79 @@ import (
 	"testing"
 	"time"
 )
+
+// TestAssumeRoleWithWebIdentityThenGetCallerIdentity is the IRSA fidelity
+// check: temporary credentials issued by AssumeRoleWithWebIdentity must, when
+// used to sign a later GetCallerIdentity, resolve to the assumed-role identity
+// rather than the account root.
+func TestAssumeRoleWithWebIdentityThenGetCallerIdentity(t *testing.T) {
+	t.Parallel()
+
+	server := NewServer(NewInMemoryPrincipalStore())
+	handler := server.Handler()
+
+	assumeForm := url.Values{
+		"Action":           {actionAssumeRoleWithWebIdentity},
+		"Version":          {"2011-06-15"},
+		"RoleArn":          {"arn:aws:iam::000000000000:role/s3-read-role"},
+		"RoleSessionName":  {"session1"},
+		"WebIdentityToken": {"any-token"},
+	}
+	assumeResp := postForm(t, handler, assumeForm, nil)
+
+	var assumed assumeRoleWithWebIdentityResponse
+	if err := xml.Unmarshal([]byte(assumeResp), &assumed); err != nil {
+		t.Fatalf("unmarshal assume response: %v\n%s", err, assumeResp)
+	}
+
+	tempAccessKey := assumed.Credentials.AccessKeyID
+	if tempAccessKey == "" {
+		t.Fatal("assume response has empty temporary access key")
+	}
+
+	// Sign the GetCallerIdentity with the temporary access key, as a real SDK
+	// would after assuming the role.
+	header := http.Header{
+		"Authorization": {"AWS4-HMAC-SHA256 Credential=" + tempAccessKey + "/20240101/us-east-1/sts/aws4_request, Signature=x"},
+	}
+	callerResp := postForm(t, handler, url.Values{
+		"Action":  {actionGetCallerIdentity},
+		"Version": {"2011-06-15"},
+	}, header)
+
+	var caller getCallerIdentityResponse
+	if err := xml.Unmarshal([]byte(callerResp), &caller); err != nil {
+		t.Fatalf("unmarshal caller response: %v\n%s", err, callerResp)
+	}
+
+	want := "arn:aws:sts::000000000000:assumed-role/s3-read-role/session1"
+	if caller.Arn != want {
+		t.Errorf("GetCallerIdentity Arn = %q, want %q", caller.Arn, want)
+	}
+}
+
+// postForm posts an AWS Query form to handler and returns the response body.
+func postForm(t *testing.T, handler http.Handler, form url.Values, header http.Header) string {
+	t.Helper()
+
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	for k, vs := range header {
+		for _, v := range vs {
+			req.Header.Add(k, v)
+		}
+	}
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200\n%s", rec.Code, rec.Body.String())
+	}
+
+	return rec.Body.String()
+}
 
 func TestAccessKeyIDFromCredentialScope(t *testing.T) {
 	t.Parallel()

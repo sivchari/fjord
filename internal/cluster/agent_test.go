@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"context"
+	"slices"
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -15,7 +16,7 @@ func TestEnsureAgent(t *testing.T) {
 
 	client := fake.NewClientset()
 
-	if err := EnsureAgent(context.Background(), client, "ghcr.io/sivchari/fjord/agent:v1"); err != nil {
+	if err := EnsureAgent(context.Background(), client, "ghcr.io/sivchari/fjord/agent:v1", false); err != nil {
 		t.Fatalf("EnsureAgent: %v", err)
 	}
 
@@ -28,7 +29,7 @@ func TestEnsureAgentIdempotent(t *testing.T) {
 	client := fake.NewClientset()
 
 	for range 2 {
-		if err := EnsureAgent(context.Background(), client, "ghcr.io/sivchari/fjord/agent:v1"); err != nil {
+		if err := EnsureAgent(context.Background(), client, "ghcr.io/sivchari/fjord/agent:v1", false); err != nil {
 			t.Fatalf("EnsureAgent: %v", err)
 		}
 	}
@@ -41,15 +42,68 @@ func TestEnsureAgentUpdatesImage(t *testing.T) {
 
 	client := fake.NewClientset()
 
-	if err := EnsureAgent(context.Background(), client, "ghcr.io/sivchari/fjord/agent:v1"); err != nil {
+	if err := EnsureAgent(context.Background(), client, "ghcr.io/sivchari/fjord/agent:v1", false); err != nil {
 		t.Fatalf("EnsureAgent: %v", err)
 	}
 
-	if err := EnsureAgent(context.Background(), client, "ghcr.io/sivchari/fjord/agent:v2"); err != nil {
+	if err := EnsureAgent(context.Background(), client, "ghcr.io/sivchari/fjord/agent:v2", false); err != nil {
 		t.Fatalf("EnsureAgent: %v", err)
 	}
 
 	assertAgentResources(t, client, "ghcr.io/sivchari/fjord/agent:v2")
+}
+
+func TestEnsureAgentEnableIRSA(t *testing.T) {
+	t.Parallel()
+
+	client := fake.NewClientset()
+
+	if err := EnsureAgent(context.Background(), client, "ghcr.io/sivchari/fjord/agent:v1", true); err != nil {
+		t.Fatalf("EnsureAgent: %v", err)
+	}
+
+	ctx := context.Background()
+
+	if _, err := client.RbacV1().ClusterRoles().Get(ctx, agentName, metav1.GetOptions{}); err != nil {
+		t.Fatalf("get cluster role: %v", err)
+	}
+
+	deployment, err := client.AppsV1().Deployments(agent.SystemNamespace).Get(ctx, agentName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get deployment: %v", err)
+	}
+
+	container := deployment.Spec.Template.Spec.Containers[0]
+
+	wantArgs := []string{
+		"serve", "api", "--port", "8080",
+		"--injector-port", "8443",
+		"--tls-cert-file", "/etc/fjord/tls/tls.crt",
+		"--tls-key-file", "/etc/fjord/tls/tls.key",
+	}
+
+	if got := container.Args; !slices.Equal(got, wantArgs) {
+		t.Errorf("container args = %v, want %v", got, wantArgs)
+	}
+
+	if len(container.VolumeMounts) != 1 || container.VolumeMounts[0].MountPath != "/etc/fjord/tls" {
+		t.Errorf("container volume mounts = %+v, want a single mount at /etc/fjord/tls", container.VolumeMounts)
+	}
+
+	if len(deployment.Spec.Template.Spec.Volumes) != 1 ||
+		deployment.Spec.Template.Spec.Volumes[0].Secret == nil ||
+		deployment.Spec.Template.Spec.Volumes[0].Secret.SecretName != AgentTLSCertName {
+		t.Errorf("deployment volumes = %+v, want a single Secret volume for %q", deployment.Spec.Template.Spec.Volumes, AgentTLSCertName)
+	}
+
+	svc, err := client.CoreV1().Services(agent.SystemNamespace).Get(ctx, agentName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get service: %v", err)
+	}
+
+	if len(svc.Spec.Ports) != 2 {
+		t.Errorf("service ports = %+v, want 2 ports", svc.Spec.Ports)
+	}
 }
 
 // assertAgentResources verifies every resource EnsureAgent creates exists

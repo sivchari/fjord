@@ -14,6 +14,7 @@ import (
 	"github.com/sivchari/fjord/internal/eksd"
 	"github.com/sivchari/fjord/internal/kind"
 	"github.com/sivchari/fjord/internal/nodeimage"
+	"github.com/sivchari/fjord/internal/pki"
 )
 
 const (
@@ -192,10 +193,21 @@ func deployAgent(ctx context.Context, logger log.Logger, provider kind.Provider,
 		}
 	}
 
+	ca, err := pki.NewCA("fjord")
+	if err != nil {
+		return fmt.Errorf("generate fjord CA: %w", err)
+	}
+
 	logger.V(0).Infof("Deploying fjord-agent (%s) ...", image)
 
-	if err := cluster.EnsureAgent(ctx, client, image); err != nil {
+	if err := cluster.EnsureAgent(ctx, client, image, true); err != nil {
 		return fmt.Errorf("ensure agent: %w", err)
+	}
+
+	logger.V(0).Info("Deploying IRSA support (pod-identity-webhook + fjord injector) ...")
+
+	if err := cluster.EnsureIRSA(ctx, client, ca, cluster.DefaultPodIdentityWebhookImage); err != nil {
+		return fmt.Errorf("ensure irsa: %w", err)
 	}
 
 	return nil
