@@ -73,7 +73,7 @@ func (p *provider) CreateCluster(name string, opts CreateOptions) error {
 		return fmt.Errorf("create cluster %q: %w", name, err)
 	}
 
-	return nil
+	return p.raiseInotifyLimits(name)
 }
 
 // DeleteCluster implements Provider.

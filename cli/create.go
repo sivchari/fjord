@@ -85,6 +85,7 @@ func runCreateCluster(ctx context.Context, logger log.Logger, opts *createCluste
 		NodeImage: image,
 		Config: &kind.Config{
 			Name:                   opts.name,
+			KubeVersion:            release.KubeVersion,
 			CoreDNSImageRepository: coreDNSRepo,
 			CoreDNSImageTag:        coreDNSTag,
 		},

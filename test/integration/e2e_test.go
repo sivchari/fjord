@@ -68,6 +68,38 @@ func TestCreateCluster(t *testing.T) {
 
 	assertDefaultStorageClass(t, client)
 	assertKubeProxyImage(t, client)
+	assertCoreDNSImage(t, client)
+}
+
+// assertCoreDNSImage verifies CoreDNS runs the EKS-D image and becomes ready,
+// proving the kubeadm dns.imageRepository override took effect and the image
+// is actually pullable. Node readiness alone does not guarantee this.
+func assertCoreDNSImage(t *testing.T, client kubernetes.Interface) {
+	t.Helper()
+
+	deadline := time.Now().Add(3 * time.Minute)
+
+	for {
+		deploy, err := client.AppsV1().Deployments("kube-system").Get(t.Context(), "coredns", metav1.GetOptions{})
+		if err != nil {
+			t.Fatalf("get coredns deployment: %v", err)
+		}
+
+		image := deploy.Spec.Template.Spec.Containers[0].Image
+		if !strings.Contains(image, "eks-distro/coredns") {
+			t.Fatalf("coredns image = %q, want it to contain %q", image, "eks-distro/coredns")
+		}
+
+		if deploy.Status.ReadyReplicas >= 1 {
+			return
+		}
+
+		if time.Now().After(deadline) {
+			t.Fatalf("coredns not ready: %d/%d replicas (image %q)", deploy.Status.ReadyReplicas, deploy.Status.Replicas, image)
+		}
+
+		time.Sleep(5 * time.Second)
+	}
 }
 
 // assertDefaultStorageClass verifies exactly one default StorageClass exists
