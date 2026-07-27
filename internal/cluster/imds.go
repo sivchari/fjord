@@ -25,6 +25,11 @@ const (
 	// anything already listening on the node's own IP, even though both
 	// use port 80.
 	imdsPort = 80
+	// imdsLinkLocalAddr is the IMDS link-local address. It scopes the host
+	// port to this address so the scheduler does not treat it as 0.0.0.0:80,
+	// which would collide with the Pod Identity Agent's own hostPort 80 (on
+	// 169.254.170.23).
+	imdsLinkLocalAddr = "169.254.169.254"
 )
 
 // imdsLabels selects fjord-imds's pods, used as both the DaemonSet's pod
@@ -108,7 +113,7 @@ func imdsDaemonSet(image, nodeRoleName string) *appsv1.DaemonSet {
 								"--node-role-name", nodeRoleName,
 							},
 							Ports: []corev1.ContainerPort{
-								{Name: "http", ContainerPort: imdsPort, HostPort: imdsPort, Protocol: corev1.ProtocolTCP},
+								{Name: "http", ContainerPort: imdsPort, HostPort: imdsPort, HostIP: imdsLinkLocalAddr, Protocol: corev1.ProtocolTCP},
 							},
 							SecurityContext: &corev1.SecurityContext{
 								Privileged: &privileged,

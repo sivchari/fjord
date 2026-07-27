@@ -38,22 +38,69 @@ const (
 
 	admissionReviewAPIVersion = "admission.k8s.io/v1"
 	admissionReviewKind       = "AdmissionReview"
+
+	// podIdentityFullURIEnvName is the environment variable the AWS SDK
+	// reads to fetch container credentials from a custom endpoint, matching
+	// what the official amazon-eks-pod-identity-webhook injects for EKS Pod
+	// Identity (see internal/cluster.EnsurePodIdentity's package doc for why
+	// fjord's own Injector, rather than that official webhook, injects it
+	// here).
+	podIdentityFullURIEnvName = "AWS_CONTAINER_CREDENTIALS_FULL_URI"
+
+	// podIdentityAuthFileEnvName and podIdentityAuthFileEnvNameGo name the
+	// file holding the token that authenticates the container credentials
+	// request. The two AWS SDK families disagree on the variable name:
+	// botocore (Python/CLI) reads AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE
+	// (the name the upstream webhook injects), while the Go SDK reads
+	// AWS_CONTAINER_CREDENTIALS_TOKEN_FILE. Injecting both makes fjord work
+	// regardless of the workload's SDK.
+	podIdentityAuthFileEnvName   = "AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE"
+	podIdentityAuthFileEnvNameGo = "AWS_CONTAINER_CREDENTIALS_TOKEN_FILE"
+
+	// podIdentityProjectedVolumeName, podIdentityProjectedMountPath, and
+	// podIdentityProjectedFileName match the official
+	// amazon-eks-pod-identity-webhook's own defaults for the projected
+	// ServiceAccount token volume backing EKS Pod Identity, so a pod
+	// injected by fjord looks identical to one injected by the real
+	// control plane.
+	podIdentityProjectedVolumeName = "eks-pod-identity-token"
+	podIdentityProjectedMountPath  = "/var/run/secrets/pods.eks.amazonaws.com/serviceaccount"
+	podIdentityProjectedFileName   = "eks-pod-identity-token"
+
+	// podIdentityTokenExpirationSeconds is the projected token's requested
+	// lifetime, matching fjord's own STS session credential TTL
+	// (sessionCredentialsTTL in sts.go).
+	podIdentityTokenExpirationSeconds = int64(3600)
 )
 
-// Injector is a Kubernetes mutating admission webhook that injects
-// stsEndpointEnvName into every pod amazon-eks-pod-identity-webhook also
-// grants IRSA credentials to (i.e. pods running as a ServiceAccount carrying
-// roleARNAnnotation), so the AWS SDK inside those pods calls fjord-agent's
-// fake STS instead of the real one for AssumeRoleWithWebIdentity.
+// Injector is a Kubernetes mutating admission webhook that injects into
+// pods the credential sources their ServiceAccount is configured for:
+//
+//   - stsEndpointEnvName, into every pod amazon-eks-pod-identity-webhook
+//     also grants IRSA credentials to (i.e. pods running as a
+//     ServiceAccount carrying roleARNAnnotation), so the AWS SDK inside
+//     those pods calls fjord-agent's fake STS instead of the real one for
+//     AssumeRoleWithWebIdentity.
+//   - podIdentityFullURIEnvName and a projected ServiceAccount token
+//     volume, into every pod running as a ServiceAccount carrying a
+//     registered PodIdentityAssociation. Real EKS Pod Identity injection is
+//     driven by amazon-eks-pod-identity-webhook watching a ConfigMap the
+//     EKS control plane populates (see internal/cluster.EnsurePodIdentity's
+//     doc comment); fjord has no such control plane, so its own Injector
+//     performs this injection instead, gated on podIdentityStore.
 type Injector struct {
-	client      kubernetes.Interface
-	stsEndpoint string
+	client           kubernetes.Interface
+	stsEndpoint      string
+	podIdentityStore PodIdentityStore
 }
 
 // NewInjector returns an Injector that injects stsEndpoint into pods whose
-// ServiceAccount, resolved via client, carries roleARNAnnotation.
-func NewInjector(client kubernetes.Interface, stsEndpoint string) *Injector {
-	return &Injector{client: client, stsEndpoint: stsEndpoint}
+// ServiceAccount, resolved via client, carries roleARNAnnotation, and (when
+// podIdentityStore is non-nil) injects EKS Pod Identity's credential source
+// into pods whose ServiceAccount has a PodIdentityAssociation registered in
+// podIdentityStore.
+func NewInjector(client kubernetes.Interface, stsEndpoint string, podIdentityStore PodIdentityStore) *Injector {
+	return &Injector{client: client, stsEndpoint: stsEndpoint, podIdentityStore: podIdentityStore}
 }
 
 // Handler returns the http.Handler serving Injector's webhook endpoint.
@@ -73,14 +120,14 @@ func (i *Injector) handleInject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	inject, err := i.needsInjection(r.Context(), review.Request)
+	opts, err := i.injectionOptionsFor(r.Context(), review.Request)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 
 		return
 	}
 
-	patch, err := buildSTSEndpointPatch(review.Request, inject, i.stsEndpoint)
+	patch, err := buildInjectionPatch(review.Request, opts)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 
@@ -90,28 +137,73 @@ func (i *Injector) handleInject(w http.ResponseWriter, r *http.Request) {
 	writeAdmissionResponse(w, review.Request.UID, patch)
 }
 
-// needsInjection reports whether req's pod should receive stsEndpointEnvName,
-// mirroring amazon-eks-pod-identity-webhook's own gate: its ServiceAccount
-// must carry roleARNAnnotation. A missing ServiceAccount is treated as "no",
+// injectionOptions selects which credential sources buildInjectionPatch
+// injects into a pod: stsEndpoint non-empty injects stsEndpointEnvName, and
+// injectPodIdentity injects EKS Pod Identity's env var and projected token
+// volume.
+type injectionOptions struct {
+	stsEndpoint       string
+	injectPodIdentity bool
+}
+
+// injectionOptionsFor resolves which credential sources req's pod should
+// receive, based on its ServiceAccount: the IRSA STS endpoint override if
+// the ServiceAccount carries roleARNAnnotation (mirroring
+// amazon-eks-pod-identity-webhook's own gate), and EKS Pod Identity's
+// credential source if the ServiceAccount has a PodIdentityAssociation
+// registered in i.podIdentityStore. A missing ServiceAccount yields neither,
 // matching pod-identity-webhook's own fail-open behavior.
-func (i *Injector) needsInjection(ctx context.Context, req *admissionv1.AdmissionRequest) (bool, error) {
+func (i *Injector) injectionOptionsFor(ctx context.Context, req *admissionv1.AdmissionRequest) (injectionOptions, error) {
 	pod, err := decodePod(req)
 	if err != nil {
-		return false, err
+		return injectionOptions{}, err
 	}
 
 	saName := serviceAccountName(pod)
 
 	sa, err := i.client.CoreV1().ServiceAccounts(req.Namespace).Get(ctx, saName, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
+		return injectionOptions{}, nil
+	}
+
+	if err != nil {
+		return injectionOptions{}, fmt.Errorf("get %s/%s service account: %w", req.Namespace, saName, err)
+	}
+
+	var opts injectionOptions
+	if serviceAccountNeedsInjection(sa) {
+		opts.stsEndpoint = i.stsEndpoint
+	}
+
+	injectPodIdentity, err := i.needsPodIdentityInjection(ctx, req.Namespace, saName)
+	if err != nil {
+		return injectionOptions{}, err
+	}
+
+	opts.injectPodIdentity = injectPodIdentity
+
+	return opts, nil
+}
+
+// needsPodIdentityInjection reports whether the ServiceAccount named
+// serviceAccount in namespace has a PodIdentityAssociation registered in
+// i.podIdentityStore. It reports false without error when i.podIdentityStore
+// is nil (Pod Identity injection disabled) or no association is registered.
+func (i *Injector) needsPodIdentityInjection(ctx context.Context, namespace, serviceAccount string) (bool, error) {
+	if i.podIdentityStore == nil {
+		return false, nil
+	}
+
+	_, err := i.podIdentityStore.GetBySA(ctx, namespace, serviceAccount)
+	if errors.Is(err, ErrPodIdentityAssociationNotFound) {
 		return false, nil
 	}
 
 	if err != nil {
-		return false, fmt.Errorf("get %s/%s service account: %w", req.Namespace, saName, err)
+		return false, fmt.Errorf("look up pod identity association for %s/%s: %w", namespace, serviceAccount, err)
 	}
 
-	return serviceAccountNeedsInjection(sa), nil
+	return true, nil
 }
 
 // serviceAccountNeedsInjection reports whether sa carries roleARNAnnotation,
@@ -140,13 +232,14 @@ type patchOperation struct {
 	Value any    `json:"value,omitempty"`
 }
 
-// buildSTSEndpointPatch computes the RFC 6902 JSON patch that injects
-// stsEndpointEnvName=stsEndpoint into every container and initContainer of
-// the pod carried by req, skipping any container that already defines the
-// env var. It returns a nil patch when inject is false, req carries no pod
-// object, or every container already defines the env var.
-func buildSTSEndpointPatch(req *admissionv1.AdmissionRequest, inject bool, stsEndpoint string) ([]byte, error) {
-	if !inject {
+// buildInjectionPatch computes the RFC 6902 JSON patch for the pod carried
+// by req, combining the IRSA endpoint override and the EKS Pod Identity
+// credential source (env var plus a projected token volume) that opts
+// selects into a single patch document. It returns a nil patch when opts
+// selects neither, req carries no pod object, or every container already
+// carries every env var opts selects.
+func buildInjectionPatch(req *admissionv1.AdmissionRequest, opts injectionOptions) ([]byte, error) {
+	if opts.stsEndpoint == "" && !opts.injectPodIdentity {
 		return nil, nil
 	}
 
@@ -155,8 +248,14 @@ func buildSTSEndpointPatch(req *admissionv1.AdmissionRequest, inject bool, stsEn
 		return nil, err
 	}
 
-	ops := containerEnvPatchOps("/spec/containers", pod.Spec.Containers, stsEndpoint)
-	ops = append(ops, containerEnvPatchOps("/spec/initContainers", pod.Spec.InitContainers, stsEndpoint)...)
+	envVars := desiredEnvVars(opts)
+
+	ops := containerEnvPatchOps("/spec/containers", pod.Spec.Containers, envVars)
+	ops = append(ops, containerEnvPatchOps("/spec/initContainers", pod.Spec.InitContainers, envVars)...)
+
+	if opts.injectPodIdentity {
+		ops = append(ops, podIdentityVolumePatchOps(pod)...)
+	}
 
 	if len(ops) == 0 {
 		return nil, nil
@@ -170,35 +269,75 @@ func buildSTSEndpointPatch(req *admissionv1.AdmissionRequest, inject bool, stsEn
 	return patch, nil
 }
 
-// containerEnvPatchOps returns the JSON patch operations that add
-// stsEndpointEnvName=stsEndpoint to every container in containers (addressed
-// by basePath, "/spec/containers" or "/spec/initContainers") that does not
-// already define it.
-func containerEnvPatchOps(basePath string, containers []corev1.Container, stsEndpoint string) []patchOperation {
+// desiredEnvVars returns the credential-related env vars opts selects, in a
+// stable order (the IRSA STS endpoint override first, matching the order
+// amazon-eks-pod-identity-webhook's own IRSA env vars would appear before
+// it).
+func desiredEnvVars(opts injectionOptions) []corev1.EnvVar {
+	var envVars []corev1.EnvVar
+
+	if opts.stsEndpoint != "" {
+		envVars = append(envVars, corev1.EnvVar{Name: stsEndpointEnvName, Value: opts.stsEndpoint})
+	}
+
+	if opts.injectPodIdentity {
+		tokenFile := podIdentityProjectedMountPath + "/" + podIdentityProjectedFileName
+
+		envVars = append(envVars,
+			corev1.EnvVar{Name: podIdentityFullURIEnvName, Value: DefaultPodIdentityFullURI},
+			// Without a token file env the SDK sends no Authorization token,
+			// and the agent rejects the request with 400 "Service account
+			// token cannot be empty". Inject both SDK families' names.
+			corev1.EnvVar{Name: podIdentityAuthFileEnvName, Value: tokenFile},
+			corev1.EnvVar{Name: podIdentityAuthFileEnvNameGo, Value: tokenFile},
+		)
+	}
+
+	return envVars
+}
+
+// containerEnvPatchOps returns the JSON patch operations that add every
+// variable in envVars a container does not already define to every
+// container in containers (addressed by basePath, "/spec/containers" or
+// "/spec/initContainers"). Every container's additions are computed and
+// applied in a single "add" operation (or a single array-creating "add" when
+// the container starts with no env vars at all), so injecting multiple
+// variables into the same container never produces two JSON Patch "add"
+// operations targeting the same path (which would silently discard the
+// first).
+func containerEnvPatchOps(basePath string, containers []corev1.Container, envVars []corev1.EnvVar) []patchOperation {
 	var ops []patchOperation
 
 	for i := range containers {
-		if hasEnvVar(containers[i].Env, stsEndpointEnvName) {
-			continue
+		var toAdd []corev1.EnvVar
+
+		for _, envVar := range envVars {
+			if !hasEnvVar(containers[i].Env, envVar.Name) {
+				toAdd = append(toAdd, envVar)
+			}
 		}
 
-		envVar := corev1.EnvVar{Name: stsEndpointEnvName, Value: stsEndpoint}
+		if len(toAdd) == 0 {
+			continue
+		}
 
 		if len(containers[i].Env) == 0 {
 			ops = append(ops, patchOperation{
 				Op:    "add",
 				Path:  fmt.Sprintf("%s/%d/env", basePath, i),
-				Value: []corev1.EnvVar{envVar},
+				Value: toAdd,
 			})
 
 			continue
 		}
 
-		ops = append(ops, patchOperation{
-			Op:    "add",
-			Path:  fmt.Sprintf("%s/%d/env/-", basePath, i),
-			Value: envVar,
-		})
+		for _, envVar := range toAdd {
+			ops = append(ops, patchOperation{
+				Op:    "add",
+				Path:  fmt.Sprintf("%s/%d/env/-", basePath, i),
+				Value: envVar,
+			})
+		}
 	}
 
 	return ops
@@ -208,6 +347,114 @@ func containerEnvPatchOps(basePath string, containers []corev1.Container, stsEnd
 func hasEnvVar(env []corev1.EnvVar, name string) bool {
 	for _, e := range env {
 		if e.Name == name {
+			return true
+		}
+	}
+
+	return false
+}
+
+// podIdentityVolumePatchOps returns the JSON patch operations that add EKS
+// Pod Identity's projected ServiceAccount token volume to pod (unless it
+// already carries a volume named podIdentityProjectedVolumeName) and mount it
+// into every container and initContainer that does not already mount it.
+func podIdentityVolumePatchOps(pod *corev1.Pod) []patchOperation {
+	var ops []patchOperation
+
+	if !hasVolume(pod.Spec.Volumes, podIdentityProjectedVolumeName) {
+		ops = append(ops, addVolumeOp(pod.Spec.Volumes))
+	}
+
+	ops = append(ops, containerVolumeMountPatchOps("/spec/containers", pod.Spec.Containers)...)
+	ops = append(ops, containerVolumeMountPatchOps("/spec/initContainers", pod.Spec.InitContainers)...)
+
+	return ops
+}
+
+// addVolumeOp returns the JSON patch operation that adds EKS Pod Identity's
+// projected ServiceAccount token volume to a pod whose existing volumes are
+// volumes.
+func addVolumeOp(volumes []corev1.Volume) patchOperation {
+	expirationSeconds := podIdentityTokenExpirationSeconds
+
+	volume := corev1.Volume{
+		Name: podIdentityProjectedVolumeName,
+		VolumeSource: corev1.VolumeSource{
+			Projected: &corev1.ProjectedVolumeSource{
+				Sources: []corev1.VolumeProjection{
+					{
+						ServiceAccountToken: &corev1.ServiceAccountTokenProjection{
+							Audience:          podIdentityAudience,
+							ExpirationSeconds: &expirationSeconds,
+							Path:              podIdentityProjectedFileName,
+						},
+					},
+				},
+			},
+		},
+	}
+
+	if len(volumes) == 0 {
+		return patchOperation{Op: "add", Path: "/spec/volumes", Value: []corev1.Volume{volume}}
+	}
+
+	return patchOperation{Op: "add", Path: "/spec/volumes/-", Value: volume}
+}
+
+// containerVolumeMountPatchOps returns the JSON patch operations that mount
+// EKS Pod Identity's projected token volume into every container in
+// containers (addressed by basePath) that does not already mount a volume
+// named podIdentityProjectedVolumeName.
+func containerVolumeMountPatchOps(basePath string, containers []corev1.Container) []patchOperation {
+	var ops []patchOperation
+
+	mount := corev1.VolumeMount{
+		Name:      podIdentityProjectedVolumeName,
+		MountPath: podIdentityProjectedMountPath,
+		ReadOnly:  true,
+	}
+
+	for i := range containers {
+		if hasVolumeMount(containers[i].VolumeMounts, podIdentityProjectedVolumeName) {
+			continue
+		}
+
+		if len(containers[i].VolumeMounts) == 0 {
+			ops = append(ops, patchOperation{
+				Op:    "add",
+				Path:  fmt.Sprintf("%s/%d/volumeMounts", basePath, i),
+				Value: []corev1.VolumeMount{mount},
+			})
+
+			continue
+		}
+
+		ops = append(ops, patchOperation{
+			Op:    "add",
+			Path:  fmt.Sprintf("%s/%d/volumeMounts/-", basePath, i),
+			Value: mount,
+		})
+	}
+
+	return ops
+}
+
+// hasVolume reports whether volumes already defines a volume named name.
+func hasVolume(volumes []corev1.Volume, name string) bool {
+	for i := range volumes {
+		if volumes[i].Name == name {
+			return true
+		}
+	}
+
+	return false
+}
+
+// hasVolumeMount reports whether mounts already defines a mount of a volume
+// named name.
+func hasVolumeMount(mounts []corev1.VolumeMount, name string) bool {
+	for _, m := range mounts {
+		if m.Name == name {
 			return true
 		}
 	}

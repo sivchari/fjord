@@ -262,3 +262,251 @@ func TestGenerateAccessKeyID(t *testing.T) {
 		seen[id] = struct{}{}
 	}
 }
+
+// newTestPodIdentityStores returns one PodIdentityStore per backing
+// implementation so every test case runs against both.
+func newTestPodIdentityStores() map[string]PodIdentityStore {
+	return map[string]PodIdentityStore{
+		"in-memory": NewInMemoryPodIdentityStore(),
+		"configmap": NewConfigMapPodIdentityStore(fake.NewClientset()),
+	}
+}
+
+// TestConfigMapPodIdentityStore_PutIntoNilDataConfigMap guards a
+// real-cluster crash: the API server returns a freshly created empty
+// ConfigMap with a nil Data map, and Put must not assign into it.
+func TestConfigMapPodIdentityStore_PutIntoNilDataConfigMap(t *testing.T) {
+	t.Parallel()
+
+	client := fake.NewClientset(&corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      PodIdentityAssociationsConfigMapName,
+			Namespace: SystemNamespace,
+		},
+		Data: nil,
+	})
+	store := NewConfigMapPodIdentityStore(client)
+
+	association := PodIdentityAssociation{
+		Namespace:      "default",
+		ServiceAccount: "app-sa",
+		RoleARN:        "arn:aws:iam::000000000000:role/app-role",
+		AssociationID:  "a-0000000000000000",
+	}
+	if err := store.Put(context.Background(), association); err != nil {
+		t.Fatalf("Put into nil-Data configmap: %v", err)
+	}
+
+	got, err := store.GetBySA(context.Background(), "default", "app-sa")
+	if err != nil {
+		t.Fatalf("GetBySA: %v", err)
+	}
+
+	if *got != association {
+		t.Errorf("GetBySA() = %+v, want %+v", *got, association)
+	}
+}
+
+func TestPodIdentityStore_PutAndGetBySA(t *testing.T) {
+	t.Parallel()
+
+	for name, store := range newTestPodIdentityStores() {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			ctx := t.Context()
+			association := PodIdentityAssociation{
+				Namespace:      "default",
+				ServiceAccount: "app-sa",
+				RoleARN:        "arn:aws:iam::000000000000:role/app-role",
+				AssociationID:  "a-1111111111111111",
+			}
+
+			if err := store.Put(ctx, association); err != nil {
+				t.Fatalf("Put() error = %v", err)
+			}
+
+			got, err := store.GetBySA(ctx, association.Namespace, association.ServiceAccount)
+			if err != nil {
+				t.Fatalf("GetBySA() error = %v", err)
+			}
+
+			if *got != association {
+				t.Errorf("GetBySA() = %+v, want %+v", *got, association)
+			}
+		})
+	}
+}
+
+func TestPodIdentityStore_PutReplacesExistingAssociation(t *testing.T) {
+	t.Parallel()
+
+	for name, store := range newTestPodIdentityStores() {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			ctx := t.Context()
+			first := PodIdentityAssociation{
+				Namespace: "default", ServiceAccount: "app-sa",
+				RoleARN: "arn:aws:iam::000000000000:role/old-role", AssociationID: "a-old00000000000001",
+			}
+			second := PodIdentityAssociation{
+				Namespace: "default", ServiceAccount: "app-sa",
+				RoleARN: "arn:aws:iam::000000000000:role/new-role", AssociationID: "a-new00000000000001",
+			}
+
+			if err := store.Put(ctx, first); err != nil {
+				t.Fatalf("Put(first) error = %v", err)
+			}
+
+			if err := store.Put(ctx, second); err != nil {
+				t.Fatalf("Put(second) error = %v", err)
+			}
+
+			got, err := store.GetBySA(ctx, "default", "app-sa")
+			if err != nil {
+				t.Fatalf("GetBySA() error = %v", err)
+			}
+
+			if *got != second {
+				t.Errorf("GetBySA() = %+v, want %+v", *got, second)
+			}
+
+			list, err := store.List(ctx)
+			if err != nil {
+				t.Fatalf("List() error = %v", err)
+			}
+
+			if len(list) != 1 {
+				t.Errorf("List() = %+v, want exactly one entry", list)
+			}
+		})
+	}
+}
+
+func TestPodIdentityStore_List(t *testing.T) {
+	t.Parallel()
+
+	for name, store := range newTestPodIdentityStores() {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			ctx := t.Context()
+
+			empty, err := store.List(ctx)
+			if err != nil {
+				t.Fatalf("List() error = %v", err)
+			}
+
+			if len(empty) != 0 {
+				t.Errorf("List() on empty store = %v, want empty", empty)
+			}
+
+			want := []PodIdentityAssociation{
+				{Namespace: "ns-a", ServiceAccount: "sa-a", RoleARN: "arn:aws:iam::000000000000:role/role-a", AssociationID: "a-aaaaaaaaaaaaaaaa"},
+				{Namespace: "ns-b", ServiceAccount: "sa-b", RoleARN: "arn:aws:iam::000000000000:role/role-b", AssociationID: "a-bbbbbbbbbbbbbbbb"},
+			}
+
+			for _, association := range want {
+				if err := store.Put(ctx, association); err != nil {
+					t.Fatalf("Put(%s/%s) error = %v", association.Namespace, association.ServiceAccount, err)
+				}
+			}
+
+			got, err := store.List(ctx)
+			if err != nil {
+				t.Fatalf("List() error = %v", err)
+			}
+
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("List() = %+v, want %+v", got, want)
+			}
+		})
+	}
+}
+
+func TestPodIdentityStore_Delete(t *testing.T) {
+	t.Parallel()
+
+	for name, store := range newTestPodIdentityStores() {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			ctx := t.Context()
+			association := PodIdentityAssociation{
+				Namespace: "default", ServiceAccount: "app-sa",
+				RoleARN: "arn:aws:iam::000000000000:role/app-role", AssociationID: "a-delete0000000001",
+			}
+
+			if err := store.Put(ctx, association); err != nil {
+				t.Fatalf("Put() error = %v", err)
+			}
+
+			if err := store.Delete(ctx, association.Namespace, association.ServiceAccount); err != nil {
+				t.Fatalf("Delete() error = %v", err)
+			}
+
+			if _, err := store.GetBySA(ctx, association.Namespace, association.ServiceAccount); !errors.Is(err, ErrPodIdentityAssociationNotFound) {
+				t.Errorf("GetBySA() after delete error = %v, want ErrPodIdentityAssociationNotFound", err)
+			}
+		})
+	}
+}
+
+func TestPodIdentityStore_NotFound(t *testing.T) {
+	t.Parallel()
+
+	for name, store := range newTestPodIdentityStores() {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			ctx := t.Context()
+
+			if _, err := store.GetBySA(ctx, "default", "missing-sa"); !errors.Is(err, ErrPodIdentityAssociationNotFound) {
+				t.Errorf("GetBySA() error = %v, want ErrPodIdentityAssociationNotFound", err)
+			}
+
+			if err := store.Delete(ctx, "default", "missing-sa"); !errors.Is(err, ErrPodIdentityAssociationNotFound) {
+				t.Errorf("Delete() error = %v, want ErrPodIdentityAssociationNotFound", err)
+			}
+		})
+	}
+}
+
+func TestPodIdentityAssociationARN(t *testing.T) {
+	t.Parallel()
+
+	got := PodIdentityAssociationARN("my-cluster", "a-1234567890123456")
+	want := "arn:aws:eks:us-east-1:000000000000:podidentityassociation/my-cluster/a-1234567890123456"
+
+	if got != want {
+		t.Errorf("PodIdentityAssociationARN() = %q, want %q", got, want)
+	}
+}
+
+func TestNewPodIdentityAssociationID(t *testing.T) {
+	t.Parallel()
+
+	seen := map[string]struct{}{}
+
+	for range 20 {
+		id, err := NewPodIdentityAssociationID()
+		if err != nil {
+			t.Fatalf("NewPodIdentityAssociationID() error = %v", err)
+		}
+
+		if !strings.HasPrefix(id, "a-") {
+			t.Errorf("NewPodIdentityAssociationID() = %q, want \"a-\" prefix", id)
+		}
+
+		if len(id) != len("a-")+16 {
+			t.Errorf("NewPodIdentityAssociationID() length = %d, want %d", len(id), len("a-")+16)
+		}
+
+		if _, ok := seen[id]; ok {
+			t.Errorf("NewPodIdentityAssociationID() produced duplicate %q", id)
+		}
+
+		seen[id] = struct{}{}
+	}
+}

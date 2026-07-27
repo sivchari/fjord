@@ -225,6 +225,12 @@ func deployAgent(ctx context.Context, logger log.Logger, provider kind.Provider,
 		return fmt.Errorf("ensure imds: %w", err)
 	}
 
+	logger.V(0).Info("Deploying EKS Pod Identity emulation (eks-pod-identity-agent) ...")
+
+	if err := cluster.EnsurePodIdentity(ctx, client, cluster.DefaultPodIdentityAgentImage, opts.name); err != nil {
+		return fmt.Errorf("ensure pod identity: %w", err)
+	}
+
 	return nil
 }
 

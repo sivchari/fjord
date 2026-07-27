@@ -422,3 +422,345 @@ func (s *InMemoryPrincipalStore) Delete(_ context.Context, name string) error {
 
 	return ErrPrincipalNotFound
 }
+
+const (
+	// PodIdentityAssociationsConfigMapName is the name of the ConfigMap
+	// backing the EKS Pod Identity association registry.
+	PodIdentityAssociationsConfigMapName = "fjord-pod-identity-associations"
+
+	podIdentityAssociationIDPrefix = "a-"
+	podIdentityAssociationIDBytes  = 8
+)
+
+// ErrPodIdentityAssociationNotFound is returned when no PodIdentityAssociation
+// is registered for a given (namespace, ServiceAccount) pair.
+var ErrPodIdentityAssociationNotFound = errors.New("agent: pod identity association not found")
+
+// PodIdentityAssociation binds a Kubernetes ServiceAccount to the IAM role
+// pods running as it should assume, mirroring an EKS Pod Identity
+// association.
+type PodIdentityAssociation struct {
+	Namespace      string `json:"namespace"`
+	ServiceAccount string `json:"serviceAccount"`
+	RoleARN        string `json:"roleArn"`
+	AssociationID  string `json:"associationId"`
+}
+
+// PodIdentityStore manages the registry of EKS Pod Identity associations.
+type PodIdentityStore interface {
+	// Put registers association, keyed by its (Namespace, ServiceAccount)
+	// pair. A later Put for the same pair replaces it.
+	Put(ctx context.Context, association PodIdentityAssociation) error
+	// GetBySA returns the association registered for the (namespace,
+	// serviceAccount) pair, or ErrPodIdentityAssociationNotFound.
+	GetBySA(ctx context.Context, namespace, serviceAccount string) (*PodIdentityAssociation, error)
+	// List returns every registered association, ordered by namespace then
+	// ServiceAccount.
+	List(ctx context.Context) ([]PodIdentityAssociation, error)
+	// Delete removes the association registered for the (namespace,
+	// serviceAccount) pair, or returns ErrPodIdentityAssociationNotFound.
+	Delete(ctx context.Context, namespace, serviceAccount string) error
+}
+
+// PodIdentityAssociationARN returns the ARN fjord assigns to a Pod Identity
+// association named associationID within clusterName.
+func PodIdentityAssociationARN(clusterName, associationID string) string {
+	return fmt.Sprintf("arn:aws:eks:%s:%s:podidentityassociation/%s/%s", imdsRegion, AccountID, clusterName, associationID)
+}
+
+// NewPodIdentityAssociationID returns a random EKS-Pod-Identity-association-ID-shaped
+// string ("a-" followed by 16 hex characters).
+func NewPodIdentityAssociationID() (string, error) {
+	suffix, err := randomHexString(podIdentityAssociationIDBytes)
+	if err != nil {
+		return "", fmt.Errorf("generate pod identity association id: %w", err)
+	}
+
+	return podIdentityAssociationIDPrefix + suffix, nil
+}
+
+// podIdentityKey builds the composite key a PodIdentityStore indexes
+// associations under. ConfigMap Data keys may not contain "/", so namespace
+// and serviceAccount are joined with "." instead; neither may itself contain
+// "." (both are Kubernetes DNS-1123 labels), so the result is unambiguous.
+func podIdentityKey(namespace, serviceAccount string) string {
+	return namespace + "." + serviceAccount
+}
+
+// ConfigMapPodIdentityStore is a PodIdentityStore backed by the kube-system
+// ConfigMap named PodIdentityAssociationsConfigMapName. Each association is
+// stored as a JSON blob keyed by podIdentityKey(Namespace, ServiceAccount).
+// Writes use resourceVersion-based optimistic locking with a bounded
+// conflict retry, matching SecretPrincipalStore.
+type ConfigMapPodIdentityStore struct {
+	client kubernetes.Interface
+}
+
+var _ PodIdentityStore = (*ConfigMapPodIdentityStore)(nil)
+
+// NewConfigMapPodIdentityStore returns a ConfigMapPodIdentityStore using
+// client to read and write the PodIdentityAssociationsConfigMapName
+// ConfigMap.
+func NewConfigMapPodIdentityStore(client kubernetes.Interface) *ConfigMapPodIdentityStore {
+	return &ConfigMapPodIdentityStore{client: client}
+}
+
+// Put implements PodIdentityStore.
+func (s *ConfigMapPodIdentityStore) Put(ctx context.Context, association PodIdentityAssociation) error {
+	encoded, err := json.Marshal(association)
+	if err != nil {
+		return fmt.Errorf("marshal pod identity association %s/%s: %w", association.Namespace, association.ServiceAccount, err)
+	}
+
+	key := podIdentityKey(association.Namespace, association.ServiceAccount)
+
+	err = retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		configMap, err := s.getOrCreateConfigMap(ctx)
+		if err != nil {
+			return err
+		}
+
+		configMap.Data[key] = string(encoded)
+
+		return s.updateConfigMap(ctx, configMap)
+	})
+	if err != nil {
+		return fmt.Errorf("put pod identity association %s/%s: %w", association.Namespace, association.ServiceAccount, err)
+	}
+
+	return nil
+}
+
+// GetBySA implements PodIdentityStore.
+func (s *ConfigMapPodIdentityStore) GetBySA(ctx context.Context, namespace, serviceAccount string) (*PodIdentityAssociation, error) {
+	configMap, err := s.getConfigMap(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	raw, ok := configMap.Data[podIdentityKey(namespace, serviceAccount)]
+	if !ok {
+		return nil, ErrPodIdentityAssociationNotFound
+	}
+
+	var association PodIdentityAssociation
+	if err := json.Unmarshal([]byte(raw), &association); err != nil {
+		return nil, fmt.Errorf("unmarshal pod identity association %s/%s: %w", namespace, serviceAccount, err)
+	}
+
+	return &association, nil
+}
+
+// List implements PodIdentityStore.
+func (s *ConfigMapPodIdentityStore) List(ctx context.Context) ([]PodIdentityAssociation, error) {
+	associations, err := s.list(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	sort.Slice(associations, func(i, j int) bool {
+		if associations[i].Namespace != associations[j].Namespace {
+			return associations[i].Namespace < associations[j].Namespace
+		}
+
+		return associations[i].ServiceAccount < associations[j].ServiceAccount
+	})
+
+	return associations, nil
+}
+
+// Delete implements PodIdentityStore.
+func (s *ConfigMapPodIdentityStore) Delete(ctx context.Context, namespace, serviceAccount string) error {
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		configMap, err := s.getConfigMap(ctx)
+		if err != nil {
+			return err
+		}
+
+		key := podIdentityKey(namespace, serviceAccount)
+		if _, ok := configMap.Data[key]; !ok {
+			return ErrPodIdentityAssociationNotFound
+		}
+
+		delete(configMap.Data, key)
+
+		return s.updateConfigMap(ctx, configMap)
+	})
+	if err != nil {
+		return fmt.Errorf("delete pod identity association %s/%s: %w", namespace, serviceAccount, err)
+	}
+
+	return nil
+}
+
+// list decodes every association currently stored in the ConfigMap, in
+// unspecified order. A missing ConfigMap is treated as an empty registry.
+func (s *ConfigMapPodIdentityStore) list(ctx context.Context) ([]PodIdentityAssociation, error) {
+	configMap, err := s.getConfigMap(ctx)
+	if errors.Is(err, ErrPodIdentityAssociationNotFound) {
+		return []PodIdentityAssociation{}, nil
+	}
+
+	if err != nil {
+		return nil, err
+	}
+
+	associations := make([]PodIdentityAssociation, 0, len(configMap.Data))
+
+	for key, raw := range configMap.Data {
+		var association PodIdentityAssociation
+		if err := json.Unmarshal([]byte(raw), &association); err != nil {
+			return nil, fmt.Errorf("unmarshal pod identity association %q: %w", key, err)
+		}
+
+		associations = append(associations, association)
+	}
+
+	return associations, nil
+}
+
+// getConfigMap fetches the PodIdentityAssociationsConfigMapName ConfigMap. A
+// missing ConfigMap is treated as an empty registry and reported via
+// ErrPodIdentityAssociationNotFound.
+func (s *ConfigMapPodIdentityStore) getConfigMap(ctx context.Context) (*corev1.ConfigMap, error) {
+	configMap, err := s.client.CoreV1().ConfigMaps(SystemNamespace).Get(ctx, PodIdentityAssociationsConfigMapName, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return nil, ErrPodIdentityAssociationNotFound
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("get %q configmap: %w", PodIdentityAssociationsConfigMapName, err)
+	}
+
+	return configMap, nil
+}
+
+// getOrCreateConfigMap fetches the PodIdentityAssociationsConfigMapName
+// ConfigMap, creating it with an empty Data map if it does not already
+// exist.
+func (s *ConfigMapPodIdentityStore) getOrCreateConfigMap(ctx context.Context) (*corev1.ConfigMap, error) {
+	configMap, err := s.getConfigMap(ctx)
+	if errors.Is(err, ErrPodIdentityAssociationNotFound) {
+		configMap, err = s.createConfigMap(ctx)
+	}
+
+	if err != nil {
+		return nil, err
+	}
+
+	// The API server returns an empty ConfigMap with a nil Data map (it
+	// drops the empty map we send on create), so callers must not assume
+	// Data is allocated. Guard both the fetched and freshly created paths
+	// here.
+	if configMap.Data == nil {
+		configMap.Data = map[string]string{}
+	}
+
+	return configMap, nil
+}
+
+// createConfigMap creates the PodIdentityAssociationsConfigMapName
+// ConfigMap with an empty Data map. A concurrent creator racing this call is
+// not an error: the ConfigMap is fetched instead.
+func (s *ConfigMapPodIdentityStore) createConfigMap(ctx context.Context) (*corev1.ConfigMap, error) {
+	configMap := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      PodIdentityAssociationsConfigMapName,
+			Namespace: SystemNamespace,
+		},
+		Data: map[string]string{},
+	}
+
+	created, err := s.client.CoreV1().ConfigMaps(SystemNamespace).Create(ctx, configMap, metav1.CreateOptions{})
+	if apierrors.IsAlreadyExists(err) {
+		return s.getConfigMap(ctx)
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("create %q configmap: %w", PodIdentityAssociationsConfigMapName, err)
+	}
+
+	return created, nil
+}
+
+// updateConfigMap persists configMap via an Update call, relying on its
+// resourceVersion for optimistic concurrency control.
+func (s *ConfigMapPodIdentityStore) updateConfigMap(ctx context.Context, configMap *corev1.ConfigMap) error {
+	if _, err := s.client.CoreV1().ConfigMaps(SystemNamespace).Update(ctx, configMap, metav1.UpdateOptions{}); err != nil {
+		return fmt.Errorf("update %q configmap: %w", PodIdentityAssociationsConfigMapName, err)
+	}
+
+	return nil
+}
+
+// InMemoryPodIdentityStore is an in-memory PodIdentityStore for tests.
+type InMemoryPodIdentityStore struct {
+	mu           sync.Mutex
+	associations map[string]PodIdentityAssociation // keyed by podIdentityKey(Namespace, ServiceAccount)
+}
+
+var _ PodIdentityStore = (*InMemoryPodIdentityStore)(nil)
+
+// NewInMemoryPodIdentityStore returns an empty InMemoryPodIdentityStore.
+func NewInMemoryPodIdentityStore() *InMemoryPodIdentityStore {
+	return &InMemoryPodIdentityStore{associations: map[string]PodIdentityAssociation{}}
+}
+
+// Put implements PodIdentityStore.
+func (s *InMemoryPodIdentityStore) Put(_ context.Context, association PodIdentityAssociation) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.associations[podIdentityKey(association.Namespace, association.ServiceAccount)] = association
+
+	return nil
+}
+
+// GetBySA implements PodIdentityStore.
+func (s *InMemoryPodIdentityStore) GetBySA(_ context.Context, namespace, serviceAccount string) (*PodIdentityAssociation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	association, ok := s.associations[podIdentityKey(namespace, serviceAccount)]
+	if !ok {
+		return nil, ErrPodIdentityAssociationNotFound
+	}
+
+	return &association, nil
+}
+
+// List implements PodIdentityStore.
+func (s *InMemoryPodIdentityStore) List(_ context.Context) ([]PodIdentityAssociation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	associations := make([]PodIdentityAssociation, 0, len(s.associations))
+	for _, association := range s.associations {
+		associations = append(associations, association)
+	}
+
+	sort.Slice(associations, func(i, j int) bool {
+		if associations[i].Namespace != associations[j].Namespace {
+			return associations[i].Namespace < associations[j].Namespace
+		}
+
+		return associations[i].ServiceAccount < associations[j].ServiceAccount
+	})
+
+	return associations, nil
+}
+
+// Delete implements PodIdentityStore.
+func (s *InMemoryPodIdentityStore) Delete(_ context.Context, namespace, serviceAccount string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	key := podIdentityKey(namespace, serviceAccount)
+	if _, ok := s.associations[key]; !ok {
+		return ErrPodIdentityAssociationNotFound
+	}
+
+	delete(s.associations, key)
+
+	return nil
+}

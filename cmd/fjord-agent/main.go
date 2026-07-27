@@ -122,7 +122,9 @@ func serveAPI(cmd *cobra.Command, opts *apiServeOptions) error {
 		return fmt.Errorf("create kubernetes client: %w", err)
 	}
 
-	server := agent.NewServer(agent.NewSecretPrincipalStore(clientset))
+	podIdentityStore := agent.NewConfigMapPodIdentityStore(clientset)
+
+	server := agent.NewServer(agent.NewSecretPrincipalStore(clientset), agent.WithPodIdentity(clientset, podIdentityStore))
 
 	servers := []managedServer{
 		{
@@ -135,7 +137,7 @@ func serveAPI(cmd *cobra.Command, opts *apiServeOptions) error {
 	}
 
 	if opts.injectorPort != 0 {
-		injector := agent.NewInjector(clientset, opts.stsEndpoint)
+		injector := agent.NewInjector(clientset, opts.stsEndpoint, podIdentityStore)
 		servers = append(servers, managedServer{
 			server: &http.Server{
 				Addr:              fmt.Sprintf(":%d", opts.injectorPort),
@@ -287,8 +289,9 @@ func serveIMDS(cmd *cobra.Command, opts *imdsServeOptions) error {
 // interface, so listening on it emulates the address every AWS SDK's
 // default credential chain and IMDS client falls back to (matching how the
 // official eks-pod-identity-agent binds its own link-local address). It is
-// idempotent: `ip addr add` reports an already-present address as an
-// "exists" error, which is not fatal.
+// idempotent: on a container restart the address is already present, which
+// `ip addr add` reports with a message that varies by iproute2 version
+// ("File exists" or "Address already assigned"); neither is fatal.
 func ensureLinkLocalAddr(ctx context.Context) error {
 	cmd := exec.CommandContext(ctx, "ip", "addr", "add", imdsLinkLocalAddr+"/32", "dev", "lo")
 
@@ -297,7 +300,8 @@ func ensureLinkLocalAddr(ctx context.Context) error {
 		return nil
 	}
 
-	if strings.Contains(string(out), "File exists") {
+	msg := string(out)
+	if strings.Contains(msg, "File exists") || strings.Contains(msg, "already assigned") {
 		return nil
 	}
 
