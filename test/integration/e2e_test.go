@@ -12,7 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"k8s.io/client-go/discovery"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
 )
 
@@ -58,13 +59,53 @@ func TestCreateCluster(t *testing.T) {
 		t.Fatalf("create cluster timed out after %s", createTimeout)
 	}
 
-	gitVersion := serverGitVersion(t)
+	client := newClient(t)
+
+	gitVersion := serverGitVersion(t, client)
 	if !strings.Contains(gitVersion, "-eks-") {
 		t.Errorf("server gitVersion = %q, want it to contain %q", gitVersion, "-eks-")
 	}
 
-	// TODO(phase 6): assert exactly one default StorageClass named gp2.
-	// TODO(phase 6): assert the kube-proxy DaemonSet image tag contains -eks-.
+	assertDefaultStorageClass(t, client)
+	assertKubeProxyImage(t, client)
+}
+
+// assertDefaultStorageClass verifies exactly one default StorageClass exists
+// and that it is gp2, matching a new EKS cluster.
+func assertDefaultStorageClass(t *testing.T, client kubernetes.Interface) {
+	t.Helper()
+
+	scs, err := client.StorageV1().StorageClasses().List(t.Context(), metav1.ListOptions{})
+	if err != nil {
+		t.Fatalf("list storage classes: %v", err)
+	}
+
+	var defaults []string
+
+	for _, sc := range scs.Items {
+		if sc.Annotations["storageclass.kubernetes.io/is-default-class"] == "true" {
+			defaults = append(defaults, sc.Name)
+		}
+	}
+
+	if len(defaults) != 1 || defaults[0] != "gp2" {
+		t.Errorf("default storage classes = %v, want exactly [gp2]", defaults)
+	}
+}
+
+// assertKubeProxyImage verifies the kube-proxy DaemonSet runs the EKS-D build.
+func assertKubeProxyImage(t *testing.T, client kubernetes.Interface) {
+	t.Helper()
+
+	ds, err := client.AppsV1().DaemonSets("kube-system").Get(t.Context(), "kube-proxy", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get kube-proxy daemonset: %v", err)
+	}
+
+	image := ds.Spec.Template.Spec.Containers[0].Image
+	if !strings.Contains(image, "-eks-") {
+		t.Errorf("kube-proxy image = %q, want it to contain %q", image, "-eks-")
+	}
 }
 
 // buildCLI compiles the fjord binary into a temp dir and returns its path.
@@ -83,9 +124,9 @@ func buildCLI(t *testing.T) string {
 	return bin
 }
 
-// serverGitVersion returns the API server's reported gitVersion using the
-// kubeconfig context kind wrote for the e2e cluster.
-func serverGitVersion(t *testing.T) string {
+// newClient builds a Kubernetes client from the kubeconfig context kind
+// wrote for the e2e cluster.
+func newClient(t *testing.T) kubernetes.Interface {
 	t.Helper()
 
 	rules := clientcmd.NewDefaultClientConfigLoadingRules()
@@ -96,12 +137,19 @@ func serverGitVersion(t *testing.T) string {
 		t.Fatalf("load kubeconfig: %v", err)
 	}
 
-	client, err := discovery.NewDiscoveryClientForConfig(config)
+	client, err := kubernetes.NewForConfig(config)
 	if err != nil {
-		t.Fatalf("create discovery client: %v", err)
+		t.Fatalf("create kubernetes client: %v", err)
 	}
 
-	version, err := client.ServerVersion()
+	return client
+}
+
+// serverGitVersion returns the API server's reported gitVersion.
+func serverGitVersion(t *testing.T, client kubernetes.Interface) string {
+	t.Helper()
+
+	version, err := client.Discovery().ServerVersion()
 	if err != nil {
 		t.Fatalf("get server version: %v", err)
 	}
