@@ -75,6 +75,48 @@ func TestConfig_ToV1Alpha4(t *testing.T) {
 	}
 }
 
+func TestConfig_ToV1Alpha4_HostPort(t *testing.T) {
+	t.Parallel()
+
+	t.Run("zero host port adds no port mapping", func(t *testing.T) {
+		t.Parallel()
+
+		got := (&kind.Config{Name: "fjord"}).ToV1Alpha4()
+
+		if len(got.Nodes) != 0 {
+			t.Errorf("Nodes = %+v, want empty", got.Nodes)
+		}
+	})
+
+	t.Run("nonzero host port maps the agent NodePort to the control-plane node", func(t *testing.T) {
+		t.Parallel()
+
+		got := (&kind.Config{Name: "fjord", HostPort: int32(48080)}).ToV1Alpha4()
+
+		if len(got.Nodes) != 1 {
+			t.Fatalf("len(Nodes) = %d, want 1", len(got.Nodes))
+		}
+
+		node := got.Nodes[0]
+		if node.Role != v1alpha4.ControlPlaneRole {
+			t.Errorf("Role = %q, want %q", node.Role, v1alpha4.ControlPlaneRole)
+		}
+
+		if len(node.ExtraPortMappings) != 1 {
+			t.Fatalf("len(ExtraPortMappings) = %d, want 1", len(node.ExtraPortMappings))
+		}
+
+		mapping := node.ExtraPortMappings[0]
+		if mapping.ContainerPort != 30080 {
+			t.Errorf("ContainerPort = %d, want 30080", mapping.ContainerPort)
+		}
+
+		if mapping.HostPort != 48080 {
+			t.Errorf("HostPort = %d, want 48080", mapping.HostPort)
+		}
+	})
+}
+
 func assertConfigConverted(t *testing.T, got *v1alpha4.Cluster, wantName string, wantPatchCount int, wantPatchContains []string) {
 	t.Helper()
 

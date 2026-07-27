@@ -1,11 +1,14 @@
 package agent
 
 import (
+	"context"
 	"errors"
 	"reflect"
 	"strings"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 )
 
@@ -15,6 +18,37 @@ func newTestStores() map[string]PrincipalStore {
 	return map[string]PrincipalStore{
 		"in-memory": NewInMemoryPrincipalStore(),
 		"secret":    NewSecretPrincipalStore(fake.NewClientset()),
+	}
+}
+
+// TestSecretPrincipalStore_PutIntoNilDataSecret guards a real-cluster crash:
+// the API server returns a freshly created empty Secret with a nil Data map,
+// and Put must not assign into it. The fake clientset preserves empty maps, so
+// this pre-seeds a Secret with nil Data to reproduce the server behavior.
+func TestSecretPrincipalStore_PutIntoNilDataSecret(t *testing.T) {
+	t.Parallel()
+
+	client := fake.NewClientset(&corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      PrincipalsSecretName,
+			Namespace: SystemNamespace,
+		},
+		Data: nil,
+	})
+	store := NewSecretPrincipalStore(client)
+
+	p := Principal{AccessKeyID: "AKIATEST00000000TEST", ARN: PrincipalARN("alice"), Name: "alice"}
+	if err := store.Put(context.Background(), p); err != nil {
+		t.Fatalf("Put into nil-Data secret: %v", err)
+	}
+
+	got, err := store.GetByName(context.Background(), "alice")
+	if err != nil {
+		t.Fatalf("GetByName: %v", err)
+	}
+
+	if got.AccessKeyID != p.AccessKeyID {
+		t.Errorf("AccessKeyID = %q, want %q", got.AccessKeyID, p.AccessKeyID)
 	}
 }
 

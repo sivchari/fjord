@@ -279,13 +279,16 @@ func (s *SecretPrincipalStore) getSecret(ctx context.Context) (*corev1.Secret, e
 func (s *SecretPrincipalStore) getOrCreateSecret(ctx context.Context) (*corev1.Secret, error) {
 	secret, err := s.getSecret(ctx)
 	if errors.Is(err, ErrPrincipalNotFound) {
-		return s.createSecret(ctx)
+		secret, err = s.createSecret(ctx)
 	}
 
 	if err != nil {
 		return nil, err
 	}
 
+	// The API server returns an empty Secret with a nil Data map (it drops
+	// the empty map we send on create), so callers must not assume Data is
+	// allocated. Guard both the fetched and freshly created paths here.
 	if secret.Data == nil {
 		secret.Data = map[string][]byte{}
 	}

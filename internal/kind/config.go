@@ -8,6 +8,10 @@ import (
 	"sigs.k8s.io/kind/pkg/apis/config/v1alpha4"
 )
 
+// agentNodePort is the NodePort fjord-agent's fake STS API is published on
+// inside the cluster (see internal/cluster.EnsureAgent's NodePort Service).
+const agentNodePort = 30080
+
 // Config is the subset of kind cluster configuration fjord exposes.
 type Config struct {
 	// Name is the cluster name.
@@ -22,11 +26,15 @@ type Config struct {
 	// CoreDNSImageTag overrides the CoreDNS image tag via a kubeadm
 	// ClusterConfiguration patch. Leave empty to use kind's default.
 	CoreDNSImageTag string
+	// HostPort, if nonzero, publishes fjord-agent's NodePort Service
+	// (agentNodePort) on this host port, so callers outside the cluster can
+	// reach its fake STS API. Zero adds no port mapping.
+	HostPort int32
 }
 
 // ToV1Alpha4 builds the kind v1alpha4.Cluster equivalent of c. v0 only
-// supports a single control-plane node, so Nodes is left unset and kind
-// applies its own default.
+// supports a single control-plane node, so Nodes is left unset unless a
+// port mapping is required, and kind applies its own single-node default.
 func (c *Config) ToV1Alpha4() *v1alpha4.Cluster {
 	cluster := &v1alpha4.Cluster{
 		Name: c.Name,
@@ -34,6 +42,20 @@ func (c *Config) ToV1Alpha4() *v1alpha4.Cluster {
 
 	if c.CoreDNSImageRepository != "" || c.CoreDNSImageTag != "" {
 		cluster.KubeadmConfigPatches = append(cluster.KubeadmConfigPatches, coreDNSKubeadmPatch(c.KubeVersion, c.CoreDNSImageRepository, c.CoreDNSImageTag))
+	}
+
+	if c.HostPort != 0 {
+		cluster.Nodes = []v1alpha4.Node{
+			{
+				Role: v1alpha4.ControlPlaneRole,
+				ExtraPortMappings: []v1alpha4.PortMapping{
+					{
+						ContainerPort: agentNodePort,
+						HostPort:      c.HostPort,
+					},
+				},
+			},
+		}
 	}
 
 	return cluster

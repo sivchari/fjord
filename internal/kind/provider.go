@@ -19,6 +19,10 @@ type Provider interface {
 	ListClusters() ([]string, error)
 	// KubeConfig returns the kubeconfig content for the cluster named name.
 	KubeConfig(name string) (string, error)
+	// LoadDockerImage saves the local docker image imageRef and loads it
+	// onto every node of the cluster named name, equivalent to `kind load
+	// docker-image`.
+	LoadDockerImage(name, imageRef string) error
 }
 
 // CreateOptions configures Provider.CreateCluster.
