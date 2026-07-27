@@ -75,7 +75,7 @@ func runCreateCluster(ctx context.Context, logger log.Logger, opts *createCluste
 		}
 	}
 
-	coreDNSRepo, coreDNSTag := splitImageRef(release.CoreDNSImage)
+	coreDNSRepo, coreDNSTag := coreDNSKubeadmRepository(release.CoreDNSImage)
 
 	logger.V(0).Infof("Creating cluster %q (EKS %s / %s) ...", opts.name, release.EKSVersion, release.KubeVersion)
 
