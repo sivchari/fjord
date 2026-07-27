@@ -15,6 +15,7 @@ func newDeleteCmd(logger log.Logger) *cobra.Command {
 		Short: "Delete a resource",
 	}
 	cmd.AddCommand(newDeleteClusterCmd(logger))
+	cmd.AddCommand(newDeletePrincipalCmd(logger))
 
 	return cmd
 }

@@ -25,6 +25,7 @@ func NewRootCmd() *cobra.Command {
 	cmd.AddCommand(newCreateCmd(logger))
 	cmd.AddCommand(newDeleteCmd(logger))
 	cmd.AddCommand(newBuildCmd(logger))
+	cmd.AddCommand(newListCmd(logger))
 
 	return cmd
 }

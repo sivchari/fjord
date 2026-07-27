@@ -22,6 +22,7 @@ func newCreateCmd(logger log.Logger) *cobra.Command {
 		Short: "Create a resource",
 	}
 	cmd.AddCommand(newCreateClusterCmd(logger))
+	cmd.AddCommand(newCreatePrincipalCmd(logger))
 
 	return cmd
 }
