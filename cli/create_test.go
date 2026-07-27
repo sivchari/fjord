@@ -1,6 +1,66 @@
 package cli
 
-import "testing"
+import (
+	"testing"
+
+	"k8s.io/client-go/kubernetes/fake"
+
+	"github.com/sivchari/fjord/internal/agent"
+)
+
+func TestEnsureNodeRolePrincipal(t *testing.T) {
+	t.Parallel()
+
+	client := fake.NewClientset()
+	ctx := t.Context()
+
+	if err := ensureNodeRolePrincipal(ctx, client, "fjord-node-role"); err != nil {
+		t.Fatalf("ensureNodeRolePrincipal() error = %v", err)
+	}
+
+	store := agent.NewSecretPrincipalStore(client)
+
+	principal, err := store.GetByName(ctx, "fjord-node-role")
+	if err != nil {
+		t.Fatalf("GetByName() error = %v", err)
+	}
+
+	wantARN := agent.RoleARN("fjord-node-role")
+	if principal.ARN != wantARN {
+		t.Errorf("principal ARN = %q, want %q", principal.ARN, wantARN)
+	}
+}
+
+func TestEnsureNodeRolePrincipalIdempotent(t *testing.T) {
+	t.Parallel()
+
+	client := fake.NewClientset()
+	ctx := t.Context()
+
+	if err := ensureNodeRolePrincipal(ctx, client, "fjord-node-role"); err != nil {
+		t.Fatalf("ensureNodeRolePrincipal() error = %v", err)
+	}
+
+	store := agent.NewSecretPrincipalStore(client)
+
+	first, err := store.GetByName(ctx, "fjord-node-role")
+	if err != nil {
+		t.Fatalf("GetByName() error = %v", err)
+	}
+
+	if err := ensureNodeRolePrincipal(ctx, client, "fjord-node-role"); err != nil {
+		t.Fatalf("ensureNodeRolePrincipal() second call error = %v", err)
+	}
+
+	second, err := store.GetByName(ctx, "fjord-node-role")
+	if err != nil {
+		t.Fatalf("GetByName() error = %v", err)
+	}
+
+	if second.AccessKeyID != first.AccessKeyID {
+		t.Errorf("second call access key = %q, want unchanged %q", second.AccessKeyID, first.AccessKeyID)
+	}
+}
 
 func TestAgentHostPort(t *testing.T) {
 	t.Parallel()

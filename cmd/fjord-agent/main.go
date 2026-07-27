@@ -9,7 +9,9 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -23,6 +25,12 @@ import (
 // shutdownTimeout bounds how long serveAPI waits for in-flight requests to
 // finish once it receives a termination signal.
 const shutdownTimeout = 5 * time.Second
+
+// imdsLinkLocalAddr is the EC2 Instance Metadata Service's well-known
+// link-local address. serveIMDS adds it to the node's loopback interface
+// before listening on it, so pods reach fjord's IMDS the same way they
+// would reach the real one on an EC2 instance.
+const imdsLinkLocalAddr = "169.254.169.254"
 
 // version is injected by goreleaser via -ldflags "-X main.version=...".
 var version string
@@ -215,21 +223,85 @@ func shutdownServers(servers []managedServer) error {
 }
 
 // newServeIMDSCmd serves the fake EC2 instance metadata service pods use
-// to fetch temporary IRSA-style credentials.
+// to fetch temporary node-role credentials, as if fjord's kind nodes were
+// real EC2 instances.
 func newServeIMDSCmd() *cobra.Command {
-	var port int
+	opts := &imdsServeOptions{}
 
 	cmd := &cobra.Command{
 		Use:   "imds",
 		Short: "Serve the fake EC2 instance metadata service",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return blockUnimplemented(cmd, "imds", port)
+			return serveIMDS(cmd, opts)
 		},
 	}
 
-	cmd.Flags().IntVar(&port, "port", 80, "port to listen on")
+	cmd.Flags().IntVar(&opts.port, "port", 80, "port to listen on, bound to "+imdsLinkLocalAddr)
+	cmd.Flags().StringVar(&opts.nodeRoleName, "node-role-name", agent.DefaultNodeRoleName,
+		"IAM role name IMDS advertises as the node's instance role")
 
 	return cmd
+}
+
+// imdsServeOptions carries `serve imds`'s flag values.
+type imdsServeOptions struct {
+	port         int
+	nodeRoleName string
+}
+
+// serveIMDS adds imdsLinkLocalAddr to the node's loopback interface, builds
+// an in-cluster Kubernetes client, and serves the fake IMDS on that address
+// until the process receives a termination signal.
+func serveIMDS(cmd *cobra.Command, opts *imdsServeOptions) error {
+	if err := ensureLinkLocalAddr(cmd.Context()); err != nil {
+		return err
+	}
+
+	config, err := rest.InClusterConfig()
+	if err != nil {
+		return fmt.Errorf("load in-cluster config: %w", err)
+	}
+
+	clientset, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		return fmt.Errorf("create kubernetes client: %w", err)
+	}
+
+	imds, err := agent.NewIMDS(agent.NewSecretPrincipalStore(clientset), opts.nodeRoleName)
+	if err != nil {
+		return fmt.Errorf("create imds server: %w", err)
+	}
+
+	server := managedServer{
+		server: &http.Server{
+			Addr:              fmt.Sprintf("%s:%d", imdsLinkLocalAddr, opts.port),
+			Handler:           imds.Handler(),
+			ReadHeaderTimeout: shutdownTimeout,
+		},
+	}
+
+	return runUntilSignal(cmd, server)
+}
+
+// ensureLinkLocalAddr adds imdsLinkLocalAddr to the node's loopback
+// interface, so listening on it emulates the address every AWS SDK's
+// default credential chain and IMDS client falls back to (matching how the
+// official eks-pod-identity-agent binds its own link-local address). It is
+// idempotent: `ip addr add` reports an already-present address as an
+// "exists" error, which is not fatal.
+func ensureLinkLocalAddr(ctx context.Context) error {
+	cmd := exec.CommandContext(ctx, "ip", "addr", "add", imdsLinkLocalAddr+"/32", "dev", "lo")
+
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		return nil
+	}
+
+	if strings.Contains(string(out), "File exists") {
+		return nil
+	}
+
+	return fmt.Errorf("add %s to lo: %w: %s", imdsLinkLocalAddr, err, out)
 }
 
 // newServeAuthenticatorCmd serves the Kubernetes API server's

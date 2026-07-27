@@ -75,6 +75,12 @@ func PrincipalARN(name string) string {
 	return fmt.Sprintf("arn:aws:iam::%s:user/%s", AccountID, name)
 }
 
+// RoleARN returns the IAM role ARN fjord assigns to a role named name, e.g.
+// the node role IMDS advertises.
+func RoleARN(name string) string {
+	return fmt.Sprintf("arn:aws:iam::%s:role/%s", AccountID, name)
+}
+
 // GenerateAccessKeyID returns a random AWS-access-key-ID-shaped string
 // ("AKIA" followed by 16 uppercase alphanumeric characters), suitable as
 // the registry key for a new Principal.

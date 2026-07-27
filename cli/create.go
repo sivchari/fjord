@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"sigs.k8s.io/kind/pkg/log"
 
+	"github.com/sivchari/fjord/internal/agent"
 	"github.com/sivchari/fjord/internal/cluster"
 	"github.com/sivchari/fjord/internal/eksd"
 	"github.com/sivchari/fjord/internal/kind"
@@ -37,13 +39,14 @@ func newCreateCmd(logger log.Logger) *cobra.Command {
 
 // createClusterOptions carries the create cluster flag values.
 type createClusterOptions struct {
-	eksVersion string
-	name       string
-	buildLocal bool
-	wait       time.Duration
-	enableAuth bool
-	agentImage string
-	hostPort   int32
+	eksVersion   string
+	name         string
+	buildLocal   bool
+	wait         time.Duration
+	enableAuth   bool
+	agentImage   string
+	hostPort     int32
+	nodeRoleName string
 }
 
 func newCreateClusterCmd(logger log.Logger) *cobra.Command {
@@ -64,6 +67,8 @@ func newCreateClusterCmd(logger log.Logger) *cobra.Command {
 	cmd.Flags().BoolVar(&opts.enableAuth, "enable-auth", true, "deploy fjord-agent for EKS-compatible AWS authentication")
 	cmd.Flags().StringVar(&opts.agentImage, "agent-image", "", "fjord-agent image to deploy (default: "+agentImageRepository+":<version>, or a locally built image with --build-local)")
 	cmd.Flags().Int32Var(&opts.hostPort, "agent-host-port", defaultAgentHostPort, "host port fjord-agent's fake STS API is published on")
+	cmd.Flags().StringVar(&opts.nodeRoleName, "node-role-name", agent.DefaultNodeRoleName,
+		"IAM role name fjord-imds advertises as the node's instance role")
 
 	return cmd
 }
@@ -208,6 +213,51 @@ func deployAgent(ctx context.Context, logger log.Logger, provider kind.Provider,
 
 	if err := cluster.EnsureIRSA(ctx, client, ca, cluster.DefaultPodIdentityWebhookImage); err != nil {
 		return fmt.Errorf("ensure irsa: %w", err)
+	}
+
+	if err := ensureNodeRolePrincipal(ctx, client, opts.nodeRoleName); err != nil {
+		return err
+	}
+
+	logger.V(0).Info("Deploying IMDS emulation (fjord-imds) ...")
+
+	if err := cluster.EnsureIMDS(ctx, client, image, opts.nodeRoleName); err != nil {
+		return fmt.Errorf("ensure imds: %w", err)
+	}
+
+	return nil
+}
+
+// ensureNodeRolePrincipal registers nodeRoleName's IAM role identity in the
+// principal registry if it is not already there, so `fjord list principal`
+// reflects the node role fjord-imds advertises to unannotated pods even
+// before any pod has fetched credentials from it. fjord-imds keeps this
+// principal's access key current as it (re)issues node role credentials.
+func ensureNodeRolePrincipal(ctx context.Context, client kubernetes.Interface, nodeRoleName string) error {
+	store := agent.NewSecretPrincipalStore(client)
+
+	_, err := store.GetByName(ctx, nodeRoleName)
+	if err == nil {
+		return nil
+	}
+
+	if !errors.Is(err, agent.ErrPrincipalNotFound) {
+		return fmt.Errorf("look up node role principal: %w", err)
+	}
+
+	accessKeyID, err := agent.GenerateAccessKeyID()
+	if err != nil {
+		return fmt.Errorf("generate node role access key id: %w", err)
+	}
+
+	principal := agent.Principal{
+		AccessKeyID: accessKeyID,
+		ARN:         agent.RoleARN(nodeRoleName),
+		Name:        nodeRoleName,
+	}
+
+	if err := store.Put(ctx, principal); err != nil {
+		return fmt.Errorf("register node role principal: %w", err)
 	}
 
 	return nil
