@@ -54,7 +54,11 @@ var agentLabels = map[string]string{"app": agentName}
 // enableIRSA is true, the Deployment additionally mounts AgentTLSCertName
 // and runs fjord-agent's IRSA injector webhook on agentInjectorPort; callers
 // enabling it must arrange for EnsureIRSA to populate that Secret.
-func EnsureAgent(ctx context.Context, client kubernetes.Interface, image string, enableIRSA bool) error {
+// awsEndpointURL, when non-empty, is passed to the injector webhook via
+// --aws-endpoint-url, so it injects AWS_ENDPOINT_URL into IAM-identity pods
+// (see internal/agent.Injector's doc comment); an empty awsEndpointURL
+// leaves that injection disabled.
+func EnsureAgent(ctx context.Context, client kubernetes.Interface, image string, enableIRSA bool, awsEndpointURL string) error {
 	if err := ensureServiceAccount(ctx, client); err != nil {
 		return err
 	}
@@ -67,7 +71,7 @@ func EnsureAgent(ctx context.Context, client kubernetes.Interface, image string,
 		return err
 	}
 
-	if err := ensureDeployment(ctx, client, image, enableIRSA); err != nil {
+	if err := ensureDeployment(ctx, client, image, enableIRSA, awsEndpointURL); err != nil {
 		return err
 	}
 
@@ -195,8 +199,8 @@ func ensureClusterRoleBinding(ctx context.Context, client kubernetes.Interface) 
 // ensureDeployment creates fjord-agent's Deployment if it does not already
 // exist, or updates it in place (preserving its ResourceVersion) to run
 // image otherwise.
-func ensureDeployment(ctx context.Context, client kubernetes.Interface, image string, enableIRSA bool) error {
-	desired := agentDeployment(image, enableIRSA)
+func ensureDeployment(ctx context.Context, client kubernetes.Interface, image string, enableIRSA bool, awsEndpointURL string) error {
+	desired := agentDeployment(image, enableIRSA, awsEndpointURL)
 
 	_, err := client.AppsV1().Deployments(agent.SystemNamespace).Create(ctx, desired, metav1.CreateOptions{})
 	if err == nil {
@@ -231,8 +235,9 @@ func ensureDeployment(ctx context.Context, client kubernetes.Interface, image st
 // agentDeployment builds the desired fjord-agent Deployment running image.
 // When enableIRSA is true, the pod additionally mounts AgentTLSCertName at
 // agentTLSMountPath and fjord-agent serves its IRSA injector webhook on
-// agentInjectorPort.
-func agentDeployment(image string, enableIRSA bool) *appsv1.Deployment {
+// agentInjectorPort. awsEndpointURL is forwarded to agentContainerArgs; see
+// EnsureAgent's doc comment.
+func agentDeployment(image string, enableIRSA bool, awsEndpointURL string) *appsv1.Deployment {
 	replicas := int32(1)
 
 	spec := corev1.PodSpec{
@@ -241,7 +246,7 @@ func agentDeployment(image string, enableIRSA bool) *appsv1.Deployment {
 			{
 				Name:  agentName,
 				Image: image,
-				Args:  agentContainerArgs(enableIRSA),
+				Args:  agentContainerArgs(enableIRSA, awsEndpointURL),
 				Ports: []corev1.ContainerPort{
 					{Name: "http", ContainerPort: agentPort, Protocol: corev1.ProtocolTCP},
 				},
@@ -285,19 +290,28 @@ func agentDeployment(image string, enableIRSA bool) *appsv1.Deployment {
 // enableIRSA true additionally serves the IRSA injector webhook on
 // agentInjectorPort using the certificate mounted at agentTLSMountPath;
 // enableIRSA false passes --injector-port 0, which fjord-agent treats as
-// "do not serve the injector webhook".
-func agentContainerArgs(enableIRSA bool) []string {
+// "do not serve the injector webhook". A non-empty awsEndpointURL is passed
+// via --aws-endpoint-url, so the injector also injects AWS_ENDPOINT_URL into
+// IAM-identity pods; an empty awsEndpointURL omits the flag, leaving that
+// injection disabled (fjord-agent's own default).
+func agentContainerArgs(enableIRSA bool, awsEndpointURL string) []string {
 	args := []string{"serve", "api", "--port", fmt.Sprintf("%d", agentPort)}
 
 	if !enableIRSA {
-		return append(args, "--injector-port", "0")
+		args = append(args, "--injector-port", "0")
+	} else {
+		args = append(args,
+			"--injector-port", fmt.Sprintf("%d", agentInjectorPort),
+			"--tls-cert-file", agentTLSMountPath+"/tls.crt",
+			"--tls-key-file", agentTLSMountPath+"/tls.key",
+		)
 	}
 
-	return append(args,
-		"--injector-port", fmt.Sprintf("%d", agentInjectorPort),
-		"--tls-cert-file", agentTLSMountPath+"/tls.crt",
-		"--tls-key-file", agentTLSMountPath+"/tls.key",
-	)
+	if awsEndpointURL != "" {
+		args = append(args, "--aws-endpoint-url", awsEndpointURL)
+	}
+
+	return args
 }
 
 // ensureService creates fjord-agent's ClusterIP Service if it does not

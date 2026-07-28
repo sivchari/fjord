@@ -211,6 +211,70 @@ var injectionPatchTestCases = []injectionPatchTestCase{
 			},
 		},
 	},
+	{
+		name: "sts and awsEndpointURL combine into a single env array in order",
+		pod: &corev1.Pod{Spec: corev1.PodSpec{
+			Containers: []corev1.Container{{Name: "app"}},
+		}},
+		opts: injectionOptions{stsEndpoint: DefaultSTSEndpoint, awsEndpointURL: "http://kumo.kube-system.svc:4566"},
+		want: []patchOperation{
+			{
+				Op:   "add",
+				Path: "/spec/containers/0/env",
+				Value: []corev1.EnvVar{
+					{Name: stsEndpointEnvName, Value: DefaultSTSEndpoint},
+					{Name: awsEndpointURLEnvName, Value: "http://kumo.kube-system.svc:4566"},
+				},
+			},
+		},
+	},
+	{
+		name: "pod identity and awsEndpointURL combine without colliding",
+		pod: &corev1.Pod{Spec: corev1.PodSpec{
+			Containers: []corev1.Container{{Name: "app"}},
+		}},
+		opts: injectionOptions{injectPodIdentity: true, awsEndpointURL: "http://kumo.kube-system.svc:4566"},
+		want: []patchOperation{
+			{
+				Op:   "add",
+				Path: "/spec/containers/0/env",
+				Value: []corev1.EnvVar{
+					{Name: awsEndpointURLEnvName, Value: "http://kumo.kube-system.svc:4566"},
+					{Name: podIdentityFullURIEnvName, Value: DefaultPodIdentityFullURI},
+					{Name: podIdentityAuthFileEnvName, Value: podIdentityProjectedMountPath + "/" + podIdentityProjectedFileName},
+					{Name: podIdentityAuthFileEnvNameGo, Value: podIdentityProjectedMountPath + "/" + podIdentityProjectedFileName},
+				},
+			},
+			{
+				Op:    "add",
+				Path:  "/spec/volumes",
+				Value: []corev1.Volume{podIdentityTokenVolume()},
+			},
+			{
+				Op:   "add",
+				Path: "/spec/containers/0/volumeMounts",
+				Value: []corev1.VolumeMount{
+					{Name: podIdentityProjectedVolumeName, MountPath: podIdentityProjectedMountPath, ReadOnly: true},
+				},
+			},
+		},
+	},
+	{
+		name: "container already carrying awsEndpointURLEnvName is skipped for that var only",
+		pod: &corev1.Pod{Spec: corev1.PodSpec{
+			Containers: []corev1.Container{
+				{Name: "app", Env: []corev1.EnvVar{{Name: awsEndpointURLEnvName, Value: "http://already-set"}}},
+			},
+		}},
+		opts: injectionOptions{stsEndpoint: DefaultSTSEndpoint, awsEndpointURL: "http://kumo.kube-system.svc:4566"},
+		want: []patchOperation{
+			{
+				Op:    "add",
+				Path:  "/spec/containers/0/env/-",
+				Value: corev1.EnvVar{Name: stsEndpointEnvName, Value: DefaultSTSEndpoint},
+			},
+		},
+	},
 }
 
 // podIdentityTokenVolume returns the projected ServiceAccount token volume
@@ -396,11 +460,13 @@ func TestServiceAccountName(t *testing.T) {
 // injectionOptionsForTestCase is a single
 // TestInjectionOptionsFor_PodIdentityAssociation case.
 type injectionOptionsForTestCase struct {
-	name            string
-	sa              *corev1.ServiceAccount
-	association     *PodIdentityAssociation
-	wantSTSEndpoint string
-	wantPodIdentity bool
+	name               string
+	sa                 *corev1.ServiceAccount
+	association        *PodIdentityAssociation
+	awsEndpointURL     string
+	wantSTSEndpoint    string
+	wantPodIdentity    bool
+	wantAWSEndpointURL string
 }
 
 // injectionOptionsForTestCases holds
@@ -429,6 +495,30 @@ var injectionOptionsForTestCases = []injectionOptionsForTestCase{
 		wantSTSEndpoint: DefaultSTSEndpoint,
 		wantPodIdentity: true,
 	},
+	{
+		name:               "pod identity association with awsEndpointURL configured",
+		sa:                 &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: "app-sa", Namespace: "default"}},
+		association:        &PodIdentityAssociation{Namespace: "default", ServiceAccount: "app-sa", RoleARN: "arn:aws:iam::000000000000:role/app-role"},
+		awsEndpointURL:     "http://kumo.kube-system.svc:4566",
+		wantPodIdentity:    true,
+		wantAWSEndpointURL: "http://kumo.kube-system.svc:4566",
+	},
+	{
+		name: "irsa annotation with awsEndpointURL configured",
+		sa: &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{
+			Name:        "app-sa",
+			Namespace:   "default",
+			Annotations: map[string]string{roleARNAnnotation: "arn:aws:iam::000000000000:role/irsa-role"},
+		}},
+		awsEndpointURL:     "http://kumo.kube-system.svc:4566",
+		wantSTSEndpoint:    DefaultSTSEndpoint,
+		wantAWSEndpointURL: "http://kumo.kube-system.svc:4566",
+	},
+	{
+		name:           "no IAM identity leaves awsEndpointURL uninjected even when configured",
+		sa:             &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: "app-sa", Namespace: "default"}},
+		awsEndpointURL: "http://kumo.kube-system.svc:4566",
+	},
 }
 
 func TestInjectionOptionsFor_PodIdentityAssociation(t *testing.T) {
@@ -447,7 +537,7 @@ func TestInjectionOptionsFor_PodIdentityAssociation(t *testing.T) {
 				}
 			}
 
-			injector := NewInjector(client, DefaultSTSEndpoint, store)
+			injector := NewInjector(client, DefaultSTSEndpoint, tt.awsEndpointURL, store)
 
 			pod := &corev1.Pod{Spec: corev1.PodSpec{ServiceAccountName: tt.sa.Name}}
 			req := admissionRequestForPod(t, pod)
@@ -465,6 +555,10 @@ func TestInjectionOptionsFor_PodIdentityAssociation(t *testing.T) {
 			if opts.injectPodIdentity != tt.wantPodIdentity {
 				t.Errorf("injectPodIdentity = %v, want %v", opts.injectPodIdentity, tt.wantPodIdentity)
 			}
+
+			if opts.awsEndpointURL != tt.wantAWSEndpointURL {
+				t.Errorf("awsEndpointURL = %q, want %q", opts.awsEndpointURL, tt.wantAWSEndpointURL)
+			}
 		})
 	}
 }
@@ -477,7 +571,7 @@ func TestInjectionOptionsFor_NilPodIdentityStore(t *testing.T) {
 	t.Parallel()
 
 	client := fake.NewClientset()
-	injector := NewInjector(client, DefaultSTSEndpoint, nil)
+	injector := NewInjector(client, DefaultSTSEndpoint, "", nil)
 
 	pod := &corev1.Pod{Spec: corev1.PodSpec{ServiceAccountName: "missing-sa"}}
 	req := admissionRequestForPod(t, pod)

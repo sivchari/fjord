@@ -95,17 +95,20 @@ func newServeAPICmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.tlsKeyFile, "tls-key-file", "/etc/fjord/tls/tls.key", "TLS private key file for the injector webhook")
 	cmd.Flags().StringVar(&opts.stsEndpoint, "sts-endpoint", agent.DefaultSTSEndpoint,
 		"AWS_ENDPOINT_URL_STS value the injector webhook injects into IRSA pods")
+	cmd.Flags().StringVar(&opts.awsEndpointURL, "aws-endpoint-url", "",
+		"AWS_ENDPOINT_URL value the injector webhook injects into IAM-identity pods for non-STS AWS calls (e.g. a local AWS emulator); empty disables it")
 
 	return cmd
 }
 
 // apiServeOptions carries `serve api`'s flag values.
 type apiServeOptions struct {
-	port         int
-	injectorPort int
-	tlsCertFile  string
-	tlsKeyFile   string
-	stsEndpoint  string
+	port           int
+	injectorPort   int
+	tlsCertFile    string
+	tlsKeyFile     string
+	stsEndpoint    string
+	awsEndpointURL string
 }
 
 // serveAPI builds an in-cluster Kubernetes client, wires it to the fake STS
@@ -143,7 +146,7 @@ func serveAPI(cmd *cobra.Command, opts *apiServeOptions) error {
 	}
 
 	if opts.injectorPort != 0 {
-		injector := agent.NewInjector(clientset, opts.stsEndpoint, podIdentityStore)
+		injector := agent.NewInjector(clientset, opts.stsEndpoint, opts.awsEndpointURL, podIdentityStore)
 		servers = append(servers, managedServer{
 			server: &http.Server{
 				Addr:              fmt.Sprintf(":%d", opts.injectorPort),

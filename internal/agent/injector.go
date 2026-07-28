@@ -25,6 +25,14 @@ const (
 	// override the endpoint it calls for AssumeRoleWithWebIdentity.
 	stsEndpointEnvName = "AWS_ENDPOINT_URL_STS"
 
+	// awsEndpointURLEnvName is the environment variable the AWS SDK reads
+	// to override the endpoint it calls for every service unless a
+	// service-specific override (such as stsEndpointEnvName) also applies;
+	// the SDK always prefers the more specific variable, so setting both
+	// routes STS calls to fjord-agent's fake STS and every other service
+	// call to awsEndpointURL (e.g. kumo).
+	awsEndpointURLEnvName = "AWS_ENDPOINT_URL"
+
 	// roleARNAnnotation is the ServiceAccount annotation
 	// amazon-eks-pod-identity-webhook keys off to decide whether a pod gets
 	// IRSA env vars and a projected token volume injected. Injector mirrors
@@ -88,9 +96,16 @@ const (
 //     EKS control plane populates (see internal/cluster.EnsurePodIdentity's
 //     doc comment); fjord has no such control plane, so its own Injector
 //     performs this injection instead, gated on podIdentityStore.
+//   - awsEndpointURLEnvName, into every pod that receives either credential
+//     source above, when awsEndpointURL is non-empty. This points the AWS
+//     SDK's other service calls (S3, Secrets Manager, SQS, ...) at a local
+//     AWS emulator such as kumo instead of real AWS; STS keeps calling
+//     fjord-agent because the SDK always prefers the service-specific
+//     stsEndpointEnvName over this general override.
 type Injector struct {
 	client           kubernetes.Interface
 	stsEndpoint      string
+	awsEndpointURL   string
 	podIdentityStore PodIdentityStore
 }
 
@@ -98,9 +113,13 @@ type Injector struct {
 // ServiceAccount, resolved via client, carries roleARNAnnotation, and (when
 // podIdentityStore is non-nil) injects EKS Pod Identity's credential source
 // into pods whose ServiceAccount has a PodIdentityAssociation registered in
-// podIdentityStore.
-func NewInjector(client kubernetes.Interface, stsEndpoint string, podIdentityStore PodIdentityStore) *Injector {
-	return &Injector{client: client, stsEndpoint: stsEndpoint, podIdentityStore: podIdentityStore}
+// podIdentityStore. When awsEndpointURL is non-empty, every pod that
+// receives either of those credential sources also receives it as
+// awsEndpointURLEnvName, pointing the AWS SDK's non-STS calls at a local AWS
+// emulator (e.g. kumo) instead of real AWS. An empty awsEndpointURL injects
+// nothing extra, preserving prior behavior.
+func NewInjector(client kubernetes.Interface, stsEndpoint, awsEndpointURL string, podIdentityStore PodIdentityStore) *Injector {
+	return &Injector{client: client, stsEndpoint: stsEndpoint, awsEndpointURL: awsEndpointURL, podIdentityStore: podIdentityStore}
 }
 
 // Handler returns the http.Handler serving Injector's webhook endpoint.
@@ -138,11 +157,13 @@ func (i *Injector) handleInject(w http.ResponseWriter, r *http.Request) {
 }
 
 // injectionOptions selects which credential sources buildInjectionPatch
-// injects into a pod: stsEndpoint non-empty injects stsEndpointEnvName, and
+// injects into a pod: stsEndpoint non-empty injects stsEndpointEnvName,
+// awsEndpointURL non-empty injects awsEndpointURLEnvName, and
 // injectPodIdentity injects EKS Pod Identity's env var and projected token
 // volume.
 type injectionOptions struct {
 	stsEndpoint       string
+	awsEndpointURL    string
 	injectPodIdentity bool
 }
 
@@ -152,7 +173,11 @@ type injectionOptions struct {
 // amazon-eks-pod-identity-webhook's own gate), and EKS Pod Identity's
 // credential source if the ServiceAccount has a PodIdentityAssociation
 // registered in i.podIdentityStore. A missing ServiceAccount yields neither,
-// matching pod-identity-webhook's own fail-open behavior.
+// matching pod-identity-webhook's own fail-open behavior. When the pod
+// receives either credential source (i.e. it carries an IAM identity) and
+// i.awsEndpointURL is non-empty, the returned options also select it, so
+// that pod's non-STS AWS SDK calls reach a local AWS emulator instead of
+// real AWS.
 func (i *Injector) injectionOptionsFor(ctx context.Context, req *admissionv1.AdmissionRequest) (injectionOptions, error) {
 	pod, err := decodePod(req)
 	if err != nil {
@@ -181,6 +206,10 @@ func (i *Injector) injectionOptionsFor(ctx context.Context, req *admissionv1.Adm
 	}
 
 	opts.injectPodIdentity = injectPodIdentity
+
+	if (opts.stsEndpoint != "" || opts.injectPodIdentity) && i.awsEndpointURL != "" {
+		opts.awsEndpointURL = i.awsEndpointURL
+	}
 
 	return opts, nil
 }
@@ -272,12 +301,18 @@ func buildInjectionPatch(req *admissionv1.AdmissionRequest, opts injectionOption
 // desiredEnvVars returns the credential-related env vars opts selects, in a
 // stable order (the IRSA STS endpoint override first, matching the order
 // amazon-eks-pod-identity-webhook's own IRSA env vars would appear before
-// it).
+// it, followed by the general AWS_ENDPOINT_URL override, which the AWS SDK
+// only consults for services without their own service-specific override
+// such as stsEndpointEnvName).
 func desiredEnvVars(opts injectionOptions) []corev1.EnvVar {
 	var envVars []corev1.EnvVar
 
 	if opts.stsEndpoint != "" {
 		envVars = append(envVars, corev1.EnvVar{Name: stsEndpointEnvName, Value: opts.stsEndpoint})
+	}
+
+	if opts.awsEndpointURL != "" {
+		envVars = append(envVars, corev1.EnvVar{Name: awsEndpointURLEnvName, Value: opts.awsEndpointURL})
 	}
 
 	if opts.injectPodIdentity {

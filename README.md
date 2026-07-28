@@ -61,6 +61,13 @@ aws eks create-pod-identity-association --endpoint-url http://localhost:48080 \
 
 **IMDS** — a bare pod (no annotation) obtains node-role credentials from `169.254.169.254`, the SDK default credential chain's fallback.
 
+**Working AWS services via kumo** — `--with-kumo` deploys [kumo](https://github.com/sivchari/kumo) (a local AWS emulator) into the cluster and injects `AWS_ENDPOINT_URL` into IAM-identity pods, so their non-STS AWS calls (S3, Secrets Manager, SQS, ...) actually resolve against kumo rather than only passing `kubectl apply`. STS stays on fjord because the SDK prefers the service-specific `AWS_ENDPOINT_URL_STS`. This lets an External Secrets Operator `ClusterSecretStore` pointed at Secrets Manager resolve real values locally.
+
+```console
+fjord create cluster --with-kumo
+# inside an IAM-identity pod: aws secretsmanager get-secret-value / aws s3 ... hit kumo
+```
+
 **Access-entry authentication** — grant an IAM principal a Kubernetes access policy and use it from `kubectl`, exactly like `aws eks update-kubeconfig` against EKS:
 
 ```console

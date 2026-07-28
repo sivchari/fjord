@@ -43,14 +43,17 @@ func newCreateCmd(logger log.Logger) *cobra.Command {
 
 // createClusterOptions carries the create cluster flag values.
 type createClusterOptions struct {
-	eksVersion   string
-	name         string
-	buildLocal   bool
-	wait         time.Duration
-	enableAuth   bool
-	agentImage   string
-	hostPort     int32
-	nodeRoleName string
+	eksVersion     string
+	name           string
+	buildLocal     bool
+	wait           time.Duration
+	enableAuth     bool
+	agentImage     string
+	hostPort       int32
+	nodeRoleName   string
+	withKumo       bool
+	kumoImage      string
+	awsEndpointURL string
 }
 
 func newCreateClusterCmd(logger log.Logger) *cobra.Command {
@@ -73,6 +76,11 @@ func newCreateClusterCmd(logger log.Logger) *cobra.Command {
 	cmd.Flags().Int32Var(&opts.hostPort, "agent-host-port", defaultAgentHostPort, "host port fjord-agent's fake STS API is published on")
 	cmd.Flags().StringVar(&opts.nodeRoleName, "node-role-name", agent.DefaultNodeRoleName,
 		"IAM role name fjord-imds advertises as the node's instance role")
+	cmd.Flags().BoolVar(&opts.withKumo, "with-kumo", false,
+		"deploy kumo (a local AWS emulator) and point IAM-identity pods' AWS SDK calls at it")
+	cmd.Flags().StringVar(&opts.kumoImage, "kumo-image", cluster.DefaultKumoImage, "kumo image to deploy (with --with-kumo)")
+	cmd.Flags().StringVar(&opts.awsEndpointURL, "aws-endpoint-url", "",
+		"AWS_ENDPOINT_URL value to inject into IAM-identity pods for non-STS AWS calls, overriding --with-kumo's own endpoint (e.g. to point at an external kumo/LocalStack instance)")
 
 	return cmd
 }
@@ -279,9 +287,17 @@ func deployAgent(ctx context.Context, logger log.Logger, provider kind.Provider,
 		}
 	}
 
+	if opts.withKumo {
+		logger.V(0).Infof("Deploying kumo (%s) ...", opts.kumoImage)
+
+		if err := cluster.EnsureKumo(ctx, client, opts.kumoImage); err != nil {
+			return fmt.Errorf("ensure kumo: %w", err)
+		}
+	}
+
 	logger.V(0).Infof("Deploying fjord-agent (%s) ...", image)
 
-	if err := cluster.EnsureAgent(ctx, client, image, true); err != nil {
+	if err := cluster.EnsureAgent(ctx, client, image, true, resolveAWSEndpointURL(opts)); err != nil {
 		return fmt.Errorf("ensure agent: %w", err)
 	}
 
@@ -312,6 +328,23 @@ func deployAgent(ctx context.Context, logger log.Logger, provider kind.Provider,
 	}
 
 	return nil
+}
+
+// resolveAWSEndpointURL returns the AWS_ENDPOINT_URL value to inject into
+// IAM-identity pods: opts.awsEndpointURL if explicitly set (taking
+// precedence, so callers can point at an external kumo/LocalStack instance),
+// else cluster.KumoEndpoint if opts.withKumo requested fjord's own kumo
+// deployment, else "" (no injection, preserving prior behavior).
+func resolveAWSEndpointURL(opts *createClusterOptions) string {
+	if opts.awsEndpointURL != "" {
+		return opts.awsEndpointURL
+	}
+
+	if opts.withKumo {
+		return cluster.KumoEndpoint
+	}
+
+	return ""
 }
 
 // deployAuthenticator sets up fjord's authentication token webhook: its RBAC,
