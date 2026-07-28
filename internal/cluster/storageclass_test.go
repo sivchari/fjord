@@ -24,7 +24,7 @@ func TestEnsureDefaultStorageClass(t *testing.T) {
 				{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:        "standard",
-						Annotations: map[string]string{defaultClassAnnotation: "true"},
+						Annotations: map[string]string{defaultClassAnnotation: defaultClassValue},
 					},
 					Provisioner: localPathProvisioner,
 				},
@@ -69,7 +69,7 @@ func assertGP2IsOnlyDefault(t *testing.T, client kubernetes.Interface) {
 	var defaults []string
 
 	for i := range scs.Items {
-		if scs.Items[i].Annotations[defaultClassAnnotation] == "true" {
+		if scs.Items[i].Annotations[defaultClassAnnotation] == defaultClassValue {
 			defaults = append(defaults, scs.Items[i].Name)
 		}
 	}
@@ -85,6 +85,21 @@ func assertGP2IsOnlyDefault(t *testing.T, client kubernetes.Interface) {
 
 	if gp2.Provisioner != localPathProvisioner {
 		t.Errorf("gp2 provisioner = %q, want %q", gp2.Provisioner, localPathProvisioner)
+	}
+
+	// gp3 is common on real EKS clusters (haro uses it); it must exist and
+	// bind locally, but must not be a second default.
+	gp3, err := client.StorageV1().StorageClasses().Get(context.Background(), "gp3", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get gp3: %v", err)
+	}
+
+	if gp3.Provisioner != localPathProvisioner {
+		t.Errorf("gp3 provisioner = %q, want %q", gp3.Provisioner, localPathProvisioner)
+	}
+
+	if gp3.Annotations[defaultClassAnnotation] == defaultClassValue {
+		t.Errorf("gp3 must not be a default StorageClass")
 	}
 }
 
@@ -104,7 +119,7 @@ func TestEnsureDefaultStorageClassIdempotent(t *testing.T) {
 		t.Fatalf("list storage classes: %v", err)
 	}
 
-	if len(scs.Items) != 1 {
-		t.Errorf("found %d storage classes, want 1", len(scs.Items))
+	if len(scs.Items) != 2 {
+		t.Errorf("found %d storage classes, want 2 (gp2, gp3)", len(scs.Items))
 	}
 }

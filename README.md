@@ -18,7 +18,7 @@ What you get out of the box, matching a new EKS cluster:
 
 - kube-apiserver / kube-controller-manager / kube-scheduler / kube-proxy built by EKS Distro, reporting an `-eks-` version string
 - CoreDNS from the EKS Distro build for the selected EKS version
-- A `gp2` default StorageClass (backed locally by kind's local-path provisioner)
+- `gp2` (default) and `gp3` StorageClasses (backed locally by kind's local-path provisioner) so EKS PVCs bind unchanged
 - IAM integration: IRSA, EKS Pod Identity, IMDS, and access-entry authentication (see below)
 - Supported EKS versions 1.29 through 1.36, resolved from a release table that CI keeps in sync with new EKS Distro patch releases
 
