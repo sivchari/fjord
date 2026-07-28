@@ -60,6 +60,49 @@ var toV1Alpha4Tests = []toV1Alpha4Test{
 			"imageTag: v1.14.2-eks-1-36-5",
 		},
 	},
+	{
+		name: "auth webhook on 1.33 uses v1beta3 map extraArgs",
+		config: kind.Config{
+			Name:        "fjord",
+			KubeVersion: "v1.33.13",
+			AuthWebhook: &kind.AuthWebhook{
+				ConfigFilePath:  "/etc/fjord/authn/webhook.yaml",
+				VolumeName:      "fjord-authn",
+				VolumeHostPath:  "/etc/fjord/authn",
+				VolumeMountPath: "/etc/fjord/authn",
+			},
+		},
+		wantName:       "fjord",
+		wantPatchCount: 1,
+		wantPatchContains: []string{
+			"apiVersion: kubeadm.k8s.io/v1beta3",
+			"apiServer:",
+			"authentication-token-webhook-config-file: /etc/fjord/authn/webhook.yaml",
+			"extraVolumes:",
+			"name: fjord-authn",
+			"hostPath: /etc/fjord/authn",
+		},
+	},
+	{
+		name: "auth webhook on 1.36 uses v1beta4 list extraArgs",
+		config: kind.Config{
+			Name:        "fjord",
+			KubeVersion: "v1.36.2",
+			AuthWebhook: &kind.AuthWebhook{
+				ConfigFilePath:  "/etc/fjord/authn/webhook.yaml",
+				VolumeName:      "fjord-authn",
+				VolumeHostPath:  "/etc/fjord/authn",
+				VolumeMountPath: "/etc/fjord/authn",
+			},
+		},
+		wantName:       "fjord",
+		wantPatchCount: 1,
+		wantPatchContains: []string{
+			"apiVersion: kubeadm.k8s.io/v1beta4",
+			"- name: authentication-token-webhook-config-file",
+			"value: /etc/fjord/authn/webhook.yaml",
+		},
+	},
 }
 
 func TestConfig_ToV1Alpha4(t *testing.T) {

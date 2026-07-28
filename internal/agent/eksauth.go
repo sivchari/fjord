@@ -134,7 +134,7 @@ func (s *Server) handleAssumeRoleForPodIdentity(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	writeJSONResponse(w, http.StatusOK, response)
+	writeJSONResponse(w, response)
 }
 
 // authenticatePodIdentityToken validates token via a Kubernetes TokenReview
@@ -269,9 +269,11 @@ func writeEKSAuthError(w http.ResponseWriter, status int, code, message string) 
 	_ = json.NewEncoder(w).Encode(map[string]string{"message": message})
 }
 
-// writeJSONResponse writes v as a JSON response body with status.
-func writeJSONResponse(w http.ResponseWriter, status int, v any) {
+// writeJSONResponse writes v as a 200 OK JSON response body. Every caller
+// reports success this way; a handler reporting an error uses
+// writeEKSAuthError instead.
+func writeJSONResponse(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
+	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(v)
 }

@@ -25,16 +25,21 @@ func (o *principalRegistryOptions) registerFlags(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&o.kubeContext, "context", "", "kubeconfig context to use (default: kind-<name>)")
 }
 
-// client builds a Kubernetes client from the default kubeconfig, targeting
-// o.kubeContext if set, otherwise the kind context for o.clusterName.
-func (o *principalRegistryOptions) client() (kubernetes.Interface, error) {
-	kubeContext := o.kubeContext
-	if kubeContext == "" {
-		kubeContext = "kind-" + o.clusterName
+// context resolves o.kubeContext if set, otherwise the kind context for
+// o.clusterName.
+func (o *principalRegistryOptions) context() string {
+	if o.kubeContext != "" {
+		return o.kubeContext
 	}
 
+	return "kind-" + o.clusterName
+}
+
+// client builds a Kubernetes client from the default kubeconfig, targeting
+// o.context().
+func (o *principalRegistryOptions) client() (kubernetes.Interface, error) {
 	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
-	overrides := &clientcmd.ConfigOverrides{CurrentContext: kubeContext}
+	overrides := &clientcmd.ConfigOverrides{CurrentContext: o.context()}
 
 	restConfig, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, overrides).ClientConfig()
 	if err != nil {

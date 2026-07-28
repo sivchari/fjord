@@ -103,9 +103,15 @@ func ensureServiceAccount(ctx context.Context, client kubernetes.Interface) erro
 // ensureClusterRole creates fjord-agent's ClusterRole if it does not already
 // exist, granting it access to the principal registry Secret (and, for
 // later phases, ConfigMaps in the same namespace), the ability to create
-// TokenReviews for the authenticator webhook, and read access to
+// TokenReviews for the authenticator webhook, read access to
 // ServiceAccounts so its IRSA injector webhook can resolve the
-// eks.amazonaws.com/role-arn annotation.
+// eks.amazonaws.com/role-arn annotation, and the ability to materialize
+// ClusterRoleBinding/RoleBinding objects for the EKS access-entries
+// facade's AssociateAccessPolicy endpoint (see internal/agent/facade.go's
+// materializeAccessPolicyRBAC). The same ClusterRole is also bound to
+// fjord-authenticator's ServiceAccount (see EnsureAuthenticatorRBAC), since
+// it needs identical read access to the principal registry and access
+// entries.
 func ensureClusterRole(ctx context.Context, client kubernetes.Interface) error {
 	role := &rbacv1.ClusterRole{
 		ObjectMeta: metav1.ObjectMeta{Name: agentName},
@@ -124,6 +130,21 @@ func ensureClusterRole(ctx context.Context, client kubernetes.Interface) error {
 				APIGroups: []string{""},
 				Resources: []string{"serviceaccounts"},
 				Verbs:     []string{"get"},
+			},
+			{
+				APIGroups: []string{"rbac.authorization.k8s.io"},
+				Resources: []string{"clusterrolebindings", "rolebindings"},
+				Verbs:     []string{"get", "create", "delete"},
+			},
+			{
+				// The bind verb lets fjord-agent create bindings to these
+				// built-in roles when materializing an access policy without
+				// holding their permissions itself, which RBAC's
+				// privilege-escalation prevention would otherwise forbid.
+				APIGroups:     []string{"rbac.authorization.k8s.io"},
+				Resources:     []string{"clusterroles"},
+				Verbs:         []string{"bind"},
+				ResourceNames: []string{"cluster-admin", "admin", "edit", "view"},
 			},
 		},
 	}

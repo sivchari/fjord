@@ -123,8 +123,14 @@ func serveAPI(cmd *cobra.Command, opts *apiServeOptions) error {
 	}
 
 	podIdentityStore := agent.NewConfigMapPodIdentityStore(clientset)
+	accessEntryStore := agent.NewConfigMapAccessEntryStore(clientset)
+	clusterInfoStore := agent.NewConfigMapClusterInfoStore(clientset)
 
-	server := agent.NewServer(agent.NewSecretPrincipalStore(clientset), agent.WithPodIdentity(clientset, podIdentityStore))
+	server := agent.NewServer(
+		agent.NewSecretPrincipalStore(clientset),
+		agent.WithPodIdentity(clientset, podIdentityStore),
+		agent.WithEKSAPI(clientset, accessEntryStore, clusterInfoStore),
+	)
 
 	servers := []managedServer{
 		{
@@ -312,31 +318,57 @@ func ensureLinkLocalAddr(ctx context.Context) error {
 // authentication webhook, mapping resolved IAM principals to Kubernetes
 // users and groups.
 func newServeAuthenticatorCmd() *cobra.Command {
-	var port int
+	opts := &authenticatorServeOptions{}
 
 	cmd := &cobra.Command{
 		Use:   "authenticator",
 		Short: "Serve the Kubernetes API server authentication webhook",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return blockUnimplemented(cmd, "authenticator", port)
+			return serveAuthenticator(cmd, opts)
 		},
 	}
 
-	cmd.Flags().IntVar(&port, "port", 9443, "port to listen on")
+	cmd.Flags().IntVar(&opts.port, "port", 9443, "port to listen on")
+	cmd.Flags().StringVar(&opts.tlsCertFile, "tls-cert-file", "", "TLS certificate file")
+	cmd.Flags().StringVar(&opts.tlsKeyFile, "tls-key-file", "", "TLS private key file")
 
 	return cmd
 }
 
-// blockUnimplemented reports that mode is not implemented yet and blocks
-// until the process receives a termination signal. It is a placeholder
-// until the corresponding internal/agent server is wired in.
-func blockUnimplemented(cmd *cobra.Command, mode string, port int) error {
-	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "fjord-agent serve %s: not implemented yet (would listen on port %d)\n", mode, port)
+// authenticatorServeOptions carries `serve authenticator`'s flag values.
+type authenticatorServeOptions struct {
+	port        int
+	tlsCertFile string
+	tlsKeyFile  string
+}
 
-	ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
+// serveAuthenticator builds an in-cluster Kubernetes client and serves the
+// TokenReview webhook the API server calls to map an EKS token to a
+// Kubernetes user and groups, resolving the caller's IAM principal from the
+// registry and its permissions from the access-entry store.
+func serveAuthenticator(cmd *cobra.Command, opts *authenticatorServeOptions) error {
+	config, err := rest.InClusterConfig()
+	if err != nil {
+		return fmt.Errorf("load in-cluster config: %w", err)
+	}
 
-	<-ctx.Done()
+	clientset, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		return fmt.Errorf("create kubernetes client: %w", err)
+	}
 
-	return nil
+	authenticator := agent.NewAuthenticator(
+		agent.NewSecretPrincipalStore(clientset),
+		agent.NewConfigMapAccessEntryStore(clientset),
+	)
+
+	return runUntilSignal(cmd, managedServer{
+		server: &http.Server{
+			Addr:              fmt.Sprintf(":%d", opts.port),
+			Handler:           authenticator.Handler(),
+			ReadHeaderTimeout: shutdownTimeout,
+		},
+		tlsCertFile: opts.tlsCertFile,
+		tlsKeyFile:  opts.tlsKeyFile,
+	})
 }

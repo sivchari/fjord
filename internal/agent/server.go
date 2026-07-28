@@ -15,12 +15,23 @@ type Server struct {
 	store    PrincipalStore
 	sessions *sessionStore
 
-	// client and podIdentityStore are non-nil only when WithPodIdentity
-	// configured this Server: client authenticates callers' ServiceAccount
-	// tokens via TokenReview, and podIdentityStore resolves them to a
-	// registered PodIdentityAssociation.
-	client           kubernetes.Interface
+	// client is non-nil once any ServerOption needing an in-cluster
+	// Kubernetes client (WithPodIdentity or WithEKSAPI) configured this
+	// Server: it authenticates callers' ServiceAccount tokens via
+	// TokenReview (podIdentityStore endpoints), and materializes RBAC for
+	// AssociateAccessPolicy (accessEntryStore endpoints).
+	client kubernetes.Interface
+
+	// podIdentityStore is non-nil only when WithPodIdentity configured this
+	// Server; it resolves an authenticated caller to a registered
+	// PodIdentityAssociation.
 	podIdentityStore PodIdentityStore
+
+	// accessEntryStore and clusterInfoStore are non-nil only when
+	// WithEKSAPI configured this Server, backing the access-entries and
+	// DescribeCluster facade endpoints respectively.
+	accessEntryStore AccessEntryStore
+	clusterInfoStore ClusterInfoStore
 }
 
 // ServerOption configures optional Server behavior.
@@ -34,6 +45,19 @@ func WithPodIdentity(client kubernetes.Interface, store PodIdentityStore) Server
 	return func(s *Server) {
 		s.client = client
 		s.podIdentityStore = store
+	}
+}
+
+// WithEKSAPI enables Server's EKS API facade endpoints (DescribeCluster and
+// the access-entries family), using client to materialize RBAC for
+// AssociateAccessPolicy, accessEntryStore to persist access entries, and
+// clusterInfoStore to resolve DescribeCluster's endpoint/certificate
+// authority.
+func WithEKSAPI(client kubernetes.Interface, accessEntryStore AccessEntryStore, clusterInfoStore ClusterInfoStore) ServerOption {
+	return func(s *Server) {
+		s.client = client
+		s.accessEntryStore = accessEntryStore
+		s.clusterInfoStore = clusterInfoStore
 	}
 }
 
@@ -57,6 +81,16 @@ func (s *Server) Handler() http.Handler {
 	if s.podIdentityStore != nil {
 		mux.HandleFunc("POST /clusters/{name}/assume-role-for-pod-identity", s.handleAssumeRoleForPodIdentity)
 		mux.HandleFunc("POST /clusters/{name}/pod-identity-associations", s.handleCreatePodIdentityAssociation)
+	}
+
+	if s.accessEntryStore != nil {
+		mux.HandleFunc("GET /clusters/{name}", s.handleDescribeCluster)
+		mux.HandleFunc("POST /clusters/{name}/access-entries", s.handleCreateAccessEntry)
+		mux.HandleFunc("GET /clusters/{name}/access-entries", s.handleListAccessEntries)
+		mux.HandleFunc("DELETE /clusters/{name}/access-entries", s.handleDeleteAccessEntry)
+		mux.HandleFunc("POST /clusters/{name}/access-entries/access-policies", s.handleAssociateAccessPolicy)
+		mux.HandleFunc("GET /clusters/{name}/access-entries/access-policies", s.handleListAssociatedAccessPolicies)
+		mux.HandleFunc("DELETE /clusters/{name}/access-entries/access-policies", s.handleDisassociateAccessPolicy)
 	}
 
 	return mux
