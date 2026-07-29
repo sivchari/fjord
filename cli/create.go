@@ -6,10 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
 	"sigs.k8s.io/kind/pkg/log"
@@ -43,17 +46,18 @@ func newCreateCmd(logger log.Logger) *cobra.Command {
 
 // createClusterOptions carries the create cluster flag values.
 type createClusterOptions struct {
-	eksVersion     string
-	name           string
-	buildLocal     bool
-	wait           time.Duration
-	enableAuth     bool
-	agentImage     string
-	hostPort       int32
-	nodeRoleName   string
-	withKumo       bool
-	kumoImage      string
-	awsEndpointURL string
+	eksVersion       string
+	name             string
+	buildLocal       bool
+	wait             time.Duration
+	enableAuth       bool
+	agentImage       string
+	hostPort         int32
+	nodeRoleName     string
+	withKumo         bool
+	kumoImage        string
+	awsEndpointURL   string
+	withLoadBalancer bool
 }
 
 func newCreateClusterCmd(logger log.Logger) *cobra.Command {
@@ -76,11 +80,13 @@ func newCreateClusterCmd(logger log.Logger) *cobra.Command {
 	cmd.Flags().Int32Var(&opts.hostPort, "agent-host-port", defaultAgentHostPort, "host port fjord-agent's fake STS API is published on")
 	cmd.Flags().StringVar(&opts.nodeRoleName, "node-role-name", agent.DefaultNodeRoleName,
 		"IAM role name fjord-imds advertises as the node's instance role")
-	cmd.Flags().BoolVar(&opts.withKumo, "with-kumo", false,
-		"deploy kumo (a local AWS emulator) and point IAM-identity pods' AWS SDK calls at it")
+	cmd.Flags().BoolVar(&opts.withKumo, "with-kumo", true,
+		"deploy kumo (a local AWS emulator) and point IAM-identity pods' AWS SDK calls at it (use --with-kumo=false to disable)")
 	cmd.Flags().StringVar(&opts.kumoImage, "kumo-image", cluster.DefaultKumoImage, "kumo image to deploy (with --with-kumo)")
 	cmd.Flags().StringVar(&opts.awsEndpointURL, "aws-endpoint-url", "",
 		"AWS_ENDPOINT_URL value to inject into IAM-identity pods for non-STS AWS calls, overriding --with-kumo's own endpoint (e.g. to point at an external kumo/LocalStack instance)")
+	cmd.Flags().BoolVar(&opts.withLoadBalancer, "with-loadbalancer", false,
+		"deploy metallb so type: LoadBalancer Services get an external IP from the kind docker network")
 
 	return cmd
 }
@@ -136,7 +142,46 @@ func runCreateCluster(ctx context.Context, logger log.Logger, opts *createCluste
 		}
 	}
 
+	if opts.withLoadBalancer {
+		if err := deployLoadBalancer(ctx, logger, provider, opts.name); err != nil {
+			return err
+		}
+	}
+
 	logger.V(0).Infof("Cluster %q is ready. Set kubectl context to \"kind-%s\".", opts.name, opts.name)
+
+	return nil
+}
+
+// deployLoadBalancer deploys metallb so type: LoadBalancer Services get an
+// external IP, using an address range carved out of the cluster's kind docker
+// network subnet.
+func deployLoadBalancer(ctx context.Context, logger log.Logger, provider kind.Provider, name string) error {
+	subnet, err := dockerNetworkSubnet(ctx)
+	if err != nil {
+		return err
+	}
+
+	addressRange, err := metalLBAddressRange(subnet)
+	if err != nil {
+		return err
+	}
+
+	dynamicClient, err := clusterDynamicClient(provider, name)
+	if err != nil {
+		return err
+	}
+
+	client, err := clusterClient(provider, name)
+	if err != nil {
+		return err
+	}
+
+	logger.V(0).Infof("Deploying metallb (LoadBalancer address range %s) ...", addressRange)
+
+	if err := cluster.EnsureLoadBalancer(ctx, client, dynamicClient, addressRange); err != nil {
+		return fmt.Errorf("ensure load balancer: %w", err)
+	}
 
 	return nil
 }
@@ -260,6 +305,49 @@ func clusterClient(provider kind.Provider, name string) (kubernetes.Interface, e
 	}
 
 	return client, nil
+}
+
+// clusterDynamicClient builds a dynamic client for the cluster named name,
+// used to apply metallb's native manifest and custom resources.
+func clusterDynamicClient(provider kind.Provider, name string) (dynamic.Interface, error) {
+	kubeconfig, err := provider.KubeConfig(name)
+	if err != nil {
+		return nil, fmt.Errorf("get kubeconfig: %w", err)
+	}
+
+	restConfig, err := clientcmd.RESTConfigFromKubeConfig([]byte(kubeconfig))
+	if err != nil {
+		return nil, fmt.Errorf("parse kubeconfig: %w", err)
+	}
+
+	dynamicClient, err := dynamic.NewForConfig(restConfig)
+	if err != nil {
+		return nil, fmt.Errorf("create dynamic client: %w", err)
+	}
+
+	return dynamicClient, nil
+}
+
+// dockerNetworkName is the docker network kind attaches its node containers
+// to.
+const dockerNetworkName = "kind"
+
+// dockerNetworkSubnet returns the IPv4 subnet of the kind docker network,
+// read via `docker network inspect`. The network carries both an IPv6 and an
+// IPv4 subnet; ipv4Subnet picks the IPv4 one.
+func dockerNetworkSubnet(ctx context.Context) (string, error) {
+	out, err := exec.CommandContext(ctx, "docker", "network", "inspect", dockerNetworkName,
+		"--format", "{{range .IPAM.Config}}{{.Subnet}} {{end}}").Output()
+	if err != nil {
+		return "", fmt.Errorf("inspect %q docker network: %w", dockerNetworkName, err)
+	}
+
+	subnet, err := ipv4Subnet(strings.TrimSpace(string(out)))
+	if err != nil {
+		return "", fmt.Errorf("resolve %q docker network subnet: %w", dockerNetworkName, err)
+	}
+
+	return subnet, nil
 }
 
 // deployAgent builds (if requested) and deploys fjord-agent to the cluster,

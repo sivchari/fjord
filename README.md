@@ -61,10 +61,9 @@ aws eks create-pod-identity-association --endpoint-url http://localhost:48080 \
 
 **IMDS** — a bare pod (no annotation) obtains node-role credentials from `169.254.169.254`, the SDK default credential chain's fallback.
 
-**Working AWS services via kumo** — `--with-kumo` deploys [kumo](https://github.com/sivchari/kumo) (a local AWS emulator) into the cluster and injects `AWS_ENDPOINT_URL` into IAM-identity pods, so their non-STS AWS calls (S3, Secrets Manager, SQS, ...) actually resolve against kumo rather than only passing `kubectl apply`. STS stays on fjord because the SDK prefers the service-specific `AWS_ENDPOINT_URL_STS`. This lets an External Secrets Operator `ClusterSecretStore` pointed at Secrets Manager resolve real values locally.
+**Working AWS services via kumo** — by default fjord deploys [kumo](https://github.com/sivchari/kumo) (a local AWS emulator) into the cluster and injects `AWS_ENDPOINT_URL` into IAM-identity pods, so their non-STS AWS calls (S3, Secrets Manager, SQS, ...) actually resolve against kumo rather than only passing `kubectl apply`. STS stays on fjord because the SDK prefers the service-specific `AWS_ENDPOINT_URL_STS`. This lets an External Secrets Operator `ClusterSecretStore` pointed at Secrets Manager resolve real values locally. Disable with `--with-kumo=false`, or point at an external emulator with `--aws-endpoint-url`.
 
 ```console
-fjord create cluster --with-kumo
 # inside an IAM-identity pod: aws secretsmanager get-secret-value / aws s3 ... hit kumo
 ```
 
@@ -78,6 +77,10 @@ kubectl --context fjord-alice@fjord get pods     # allowed by the View policy
 ```
 
 The standard access policies map to the built-in Kubernetes roles: `ClusterAdmin` -> `cluster-admin`, `Admin` -> `admin`, `Edit` -> `edit`, `View` -> `view`.
+
+## LoadBalancer services
+
+`--with-loadbalancer` deploys [metallb](https://metallb.io/) in L2 mode with an address pool carved from the kind docker network, so `type: LoadBalancer` Services get a reachable external IP instead of staying `<pending>`.
 
 ## Development
 
