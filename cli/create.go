@@ -137,7 +137,7 @@ func runCreateCluster(ctx context.Context, logger log.Logger, opts *createCluste
 	}
 
 	if opts.enableAuth {
-		if err := deployAgent(ctx, logger, provider, client, opts, ca); err != nil {
+		if err := deployAgent(ctx, logger, provider, client, opts, ca, release.EKSVersion); err != nil {
 			return err
 		}
 	}
@@ -354,8 +354,9 @@ func dockerNetworkSubnet(ctx context.Context) (string, error) {
 // giving it EKS-compatible AWS authentication. ca is the CA the
 // authenticator's static pod manifest was already staged to trust (see
 // stageAuthenticator); it is reused here for IRSA/pod-identity-webhook's
-// serving certificates.
-func deployAgent(ctx context.Context, logger log.Logger, provider kind.Provider, client kubernetes.Interface, opts *createClusterOptions, ca *pki.CA) error {
+// serving certificates. eksVersion is registered in the EKS API facade's
+// ClusterInfo store so DescribeCluster/ListClusters can report it.
+func deployAgent(ctx context.Context, logger log.Logger, provider kind.Provider, client kubernetes.Interface, opts *createClusterOptions, ca *pki.CA, eksVersion string) error {
 	image := opts.agentImage
 	if image == "" {
 		image = defaultAgentImage()
@@ -389,7 +390,7 @@ func deployAgent(ctx context.Context, logger log.Logger, provider kind.Provider,
 		return fmt.Errorf("ensure agent: %w", err)
 	}
 
-	if err := deployAuthenticator(ctx, logger, provider, client, image, opts.name); err != nil {
+	if err := deployAuthenticator(ctx, logger, provider, client, image, opts.name, eksVersion); err != nil {
 		return err
 	}
 
@@ -437,7 +438,7 @@ func resolveAWSEndpointURL(opts *createClusterOptions) string {
 
 // deployAuthenticator sets up fjord's authentication token webhook: its RBAC,
 // the DaemonSet that serves it, and the cluster-info the EKS API facade needs.
-func deployAuthenticator(ctx context.Context, logger log.Logger, provider kind.Provider, client kubernetes.Interface, image, name string) error {
+func deployAuthenticator(ctx context.Context, logger log.Logger, provider kind.Provider, client kubernetes.Interface, image, name, eksVersion string) error {
 	logger.V(0).Info("Deploying the authentication token webhook (fjord-authenticator) ...")
 
 	if err := cluster.EnsureAuthenticatorRBAC(ctx, client); err != nil {
@@ -448,14 +449,15 @@ func deployAuthenticator(ctx context.Context, logger log.Logger, provider kind.P
 		return fmt.Errorf("ensure authenticator: %w", err)
 	}
 
-	return ensureClusterInfo(ctx, provider, client, name)
+	return ensureClusterInfo(ctx, provider, client, name, eksVersion)
 }
 
-// ensureClusterInfo registers name's API server endpoint and certificate
-// authority (read from kind's own kubeconfig for the cluster) in
-// fjord-agent's ClusterInfo store, so the EKS API facade's DescribeCluster
-// endpoint (which `fjord update-kubeconfig` calls) can serve them.
-func ensureClusterInfo(ctx context.Context, provider kind.Provider, client kubernetes.Interface, name string) error {
+// ensureClusterInfo registers name's API server endpoint, certificate
+// authority (read from kind's own kubeconfig for the cluster), and EKS
+// version in fjord-agent's ClusterInfo store, so the EKS API facade's
+// DescribeCluster and ListClusters endpoints (which `fjord update-kubeconfig`
+// and standard EKS tooling call) can serve them.
+func ensureClusterInfo(ctx context.Context, provider kind.Provider, client kubernetes.Interface, name, eksVersion string) error {
 	kubeconfig, err := provider.KubeConfig(name)
 	if err != nil {
 		return fmt.Errorf("get kubeconfig: %w", err)
@@ -477,11 +479,13 @@ func ensureClusterInfo(ctx context.Context, provider kind.Provider, client kuber
 	}
 
 	info := agent.ClusterInfo{
+		Name:                     name,
 		Endpoint:                 kubeCluster.Server,
 		CertificateAuthorityData: base64.StdEncoding.EncodeToString(kubeCluster.CertificateAuthorityData),
+		Version:                  eksVersion,
 	}
 
-	if err := agent.NewConfigMapClusterInfoStore(client).Put(ctx, info); err != nil {
+	if err := agent.NewConfigMapClusterInfoStore(client).Put(ctx, &info); err != nil {
 		return fmt.Errorf("register cluster info: %w", err)
 	}
 

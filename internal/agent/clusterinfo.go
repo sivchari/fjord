@@ -25,23 +25,32 @@ const (
 // registered yet.
 var ErrClusterInfoNotFound = errors.New("agent: cluster info not found")
 
-// ClusterInfo is the cluster endpoint and certificate authority
-// DescribeCluster reports, populated by `fjord create cluster` from the
-// kind-provisioned control plane's own kubeconfig.
+// ClusterInfo is the cluster endpoint, certificate authority, and identity
+// DescribeCluster and ListClusters report, populated by `fjord create
+// cluster` from the kind-provisioned control plane's own kubeconfig and the
+// resolved EKS version.
 type ClusterInfo struct {
+	// Name is the cluster name, as passed to `fjord create cluster --name`.
+	Name string `json:"name,omitempty"`
 	// Endpoint is the cluster's Kubernetes API server URL.
 	Endpoint string `json:"endpoint"`
 	// CertificateAuthorityData is the base64-encoded PEM certificate
 	// authority data for Endpoint, matching the real EKS API's
 	// cluster.certificateAuthority.data shape.
 	CertificateAuthorityData string `json:"certificateAuthorityData"`
+	// Version is the EKS Kubernetes minor version, e.g. "1.33". Absent on
+	// ClusterInfo registered before this field was introduced.
+	Version string `json:"version,omitempty"`
+	// PlatformVersion is the EKS platform version, e.g. "eks.1". Absent on
+	// ClusterInfo registered before this field was introduced.
+	PlatformVersion string `json:"platformVersion,omitempty"`
 }
 
 // ClusterInfoStore manages the single ClusterInfo record DescribeCluster
 // serves.
 type ClusterInfoStore interface {
 	// Put registers info, replacing any previously registered ClusterInfo.
-	Put(ctx context.Context, info ClusterInfo) error
+	Put(ctx context.Context, info *ClusterInfo) error
 	// Get returns the registered ClusterInfo, or ErrClusterInfoNotFound if
 	// none has been registered yet.
 	Get(ctx context.Context) (*ClusterInfo, error)
@@ -62,7 +71,7 @@ func NewConfigMapClusterInfoStore(client kubernetes.Interface) *ConfigMapCluster
 }
 
 // Put implements ClusterInfoStore.
-func (s *ConfigMapClusterInfoStore) Put(ctx context.Context, info ClusterInfo) error {
+func (s *ConfigMapClusterInfoStore) Put(ctx context.Context, info *ClusterInfo) error {
 	encoded, err := json.Marshal(info)
 	if err != nil {
 		return fmt.Errorf("marshal cluster info: %w", err)
@@ -137,11 +146,12 @@ func NewInMemoryClusterInfoStore() *InMemoryClusterInfoStore {
 }
 
 // Put implements ClusterInfoStore.
-func (s *InMemoryClusterInfoStore) Put(_ context.Context, info ClusterInfo) error {
+func (s *InMemoryClusterInfoStore) Put(_ context.Context, info *ClusterInfo) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.info = &info
+	copied := *info
+	s.info = &copied
 
 	return nil
 }

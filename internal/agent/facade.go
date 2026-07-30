@@ -40,6 +40,20 @@ const (
 	// accessEntryBindingPrefix names every ClusterRoleBinding/RoleBinding
 	// AssociateAccessPolicy materializes.
 	accessEntryBindingPrefix = "fjord-access-entry-"
+
+	// defaultPlatformVersion is the platformVersion DescribeCluster reports
+	// when ClusterInfo has none registered (e.g. ClusterInfo predating the
+	// PlatformVersion field).
+	defaultPlatformVersion = "eks.1"
+
+	// dummyClusterCreatedAt is the fixed createdAt DescribeCluster reports.
+	// fjord does not track a real creation time, and this environment
+	// disallows time.Now(), so every cluster reports the same placeholder.
+	dummyClusterCreatedAt = "2024-01-01T00:00:00.000000+00:00"
+
+	// dummyClusterRoleName is the IAM role name DescribeCluster's roleArn
+	// reports. fjord has no real IAM role backing the cluster.
+	dummyClusterRoleName = "fjord-cluster-role"
 )
 
 // createPodIdentityAssociationRequest is the request body of
@@ -130,13 +144,25 @@ type describeClusterResponse struct {
 	Cluster describeClusterDetail `json:"cluster"`
 }
 
-// describeClusterDetail is the cluster shape describeClusterResponse embeds.
+// describeClusterDetail is the cluster shape describeClusterResponse embeds,
+// matching the fields real `aws eks describe-cluster` returns that standard
+// EKS tooling (aws eks / eksctl / terraform) expects to find.
 type describeClusterDetail struct {
-	Name                 string                              `json:"name"`
-	ARN                  string                              `json:"arn"`
-	Status               string                              `json:"status"`
-	Endpoint             string                              `json:"endpoint"`
-	CertificateAuthority describeClusterCertificateAuthority `json:"certificateAuthority"`
+	Name                    string                                 `json:"name"`
+	ARN                     string                                 `json:"arn"`
+	Status                  string                                 `json:"status"`
+	Endpoint                string                                 `json:"endpoint"`
+	CertificateAuthority    describeClusterCertificateAuthority    `json:"certificateAuthority"`
+	Version                 string                                 `json:"version"`
+	PlatformVersion         string                                 `json:"platformVersion"`
+	RoleARN                 string                                 `json:"roleArn"`
+	CreatedAt               string                                 `json:"createdAt"`
+	Identity                describeClusterIdentity                `json:"identity"`
+	ResourcesVPCConfig      describeClusterResourcesVPCConfig      `json:"resourcesVpcConfig"`
+	KubernetesNetworkConfig describeClusterKubernetesNetworkConfig `json:"kubernetesNetworkConfig"`
+	Tags                    map[string]string                      `json:"tags"`
+	Health                  describeClusterHealth                  `json:"health"`
+	AccessConfig            describeClusterAccessConfig            `json:"accessConfig"`
 }
 
 // describeClusterCertificateAuthority is the certificateAuthority shape
@@ -145,10 +171,48 @@ type describeClusterCertificateAuthority struct {
 	Data string `json:"data"`
 }
 
+// describeClusterIdentity is the identity shape describeClusterDetail
+// embeds.
+type describeClusterIdentity struct {
+	OIDC describeClusterOIDC `json:"oidc"`
+}
+
+// describeClusterOIDC is the identity.oidc shape describeClusterIdentity
+// embeds.
+type describeClusterOIDC struct {
+	Issuer string `json:"issuer"`
+}
+
+// describeClusterResourcesVPCConfig is the resourcesVpcConfig shape
+// describeClusterDetail embeds.
+type describeClusterResourcesVPCConfig struct {
+	EndpointPublicAccess  bool `json:"endpointPublicAccess"`
+	EndpointPrivateAccess bool `json:"endpointPrivateAccess"`
+}
+
+// describeClusterKubernetesNetworkConfig is the kubernetesNetworkConfig
+// shape describeClusterDetail embeds.
+type describeClusterKubernetesNetworkConfig struct {
+	ServiceIPv4CIDR string `json:"serviceIpv4Cidr"`
+	IPFamily        string `json:"ipFamily"`
+}
+
+// describeClusterHealth is the health shape describeClusterDetail and
+// describeAddonDetail embed. fjord reports no issues.
+type describeClusterHealth struct {
+	Issues []string `json:"issues"`
+}
+
+// describeClusterAccessConfig is the accessConfig shape describeClusterDetail
+// embeds.
+type describeClusterAccessConfig struct {
+	AuthenticationMode string `json:"authenticationMode"`
+}
+
 // handleDescribeCluster serves GET /clusters/{name}, the EKS API facade
-// endpoint `fjord update-kubeconfig` calls to resolve a cluster's API server
-// endpoint and certificate authority, matching the real `aws eks
-// describe-cluster` call `aws eks update-kubeconfig` makes.
+// endpoint `fjord update-kubeconfig` and standard EKS tooling (aws eks /
+// eksctl / terraform) call to resolve a cluster's details, matching the real
+// `aws eks describe-cluster` response shape.
 func (s *Server) handleDescribeCluster(w http.ResponseWriter, r *http.Request) {
 	info, err := s.clusterInfoStore.Get(r.Context())
 	if errors.Is(err, ErrClusterInfoNotFound) {
@@ -163,17 +227,66 @@ func (s *Server) handleDescribeCluster(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	clusterName := r.PathValue("name")
+	writeJSONResponse(w, describeClusterResponse{Cluster: describeClusterDetailFor(r.PathValue("name"), info)})
+}
 
-	writeJSONResponse(w, describeClusterResponse{
-		Cluster: describeClusterDetail{
-			Name:                 clusterName,
-			ARN:                  clusterARN(clusterName),
-			Status:               "ACTIVE",
-			Endpoint:             info.Endpoint,
-			CertificateAuthority: describeClusterCertificateAuthority{Data: info.CertificateAuthorityData},
+// describeClusterDetailFor builds the describeClusterDetail for the cluster
+// named clusterName, populating its EKS-version-dependent fields from info.
+func describeClusterDetailFor(clusterName string, info *ClusterInfo) describeClusterDetail {
+	platformVersion := info.PlatformVersion
+	if platformVersion == "" {
+		platformVersion = defaultPlatformVersion
+	}
+
+	return describeClusterDetail{
+		Name:                 clusterName,
+		ARN:                  clusterARN(clusterName),
+		Status:               "ACTIVE",
+		Endpoint:             info.Endpoint,
+		CertificateAuthority: describeClusterCertificateAuthority{Data: info.CertificateAuthorityData},
+		Version:              info.Version,
+		PlatformVersion:      platformVersion,
+		RoleARN:              fmt.Sprintf("arn:aws:iam::%s:role/%s", AccountID, dummyClusterRoleName),
+		CreatedAt:            dummyClusterCreatedAt,
+		Identity: describeClusterIdentity{
+			OIDC: describeClusterOIDC{Issuer: fmt.Sprintf("https://oidc.eks.%s.amazonaws.com/id/FJORD%s", imdsRegion, clusterName)},
 		},
-	})
+		ResourcesVPCConfig: describeClusterResourcesVPCConfig{EndpointPublicAccess: true, EndpointPrivateAccess: false},
+		KubernetesNetworkConfig: describeClusterKubernetesNetworkConfig{
+			ServiceIPv4CIDR: "10.96.0.0/12",
+			IPFamily:        "ipv4",
+		},
+		Tags:         map[string]string{},
+		Health:       describeClusterHealth{Issues: []string{}},
+		AccessConfig: describeClusterAccessConfig{AuthenticationMode: "API"},
+	}
+}
+
+// listClustersResponse is the response body of GET /clusters.
+type listClustersResponse struct {
+	Clusters  []string `json:"clusters"`
+	NextToken *string  `json:"nextToken"`
+}
+
+// handleListClusters serves GET /clusters, the EKS API facade endpoint
+// standard EKS tooling (aws eks list-clusters) calls to discover clusters.
+// fjord's facade is single-cluster: it reports the one cluster registered in
+// clusterInfoStore, if any.
+func (s *Server) handleListClusters(w http.ResponseWriter, r *http.Request) {
+	info, err := s.clusterInfoStore.Get(r.Context())
+	if errors.Is(err, ErrClusterInfoNotFound) {
+		writeJSONResponse(w, listClustersResponse{Clusters: []string{}})
+
+		return
+	}
+
+	if err != nil {
+		writeEKSAuthError(w, http.StatusInternalServerError, eksErrorInternalServer, err.Error())
+
+		return
+	}
+
+	writeJSONResponse(w, listClustersResponse{Clusters: []string{info.Name}})
 }
 
 // clusterARN returns the ARN fjord assigns to the cluster named name.

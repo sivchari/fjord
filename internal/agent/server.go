@@ -29,7 +29,7 @@ type Server struct {
 
 	// accessEntryStore and clusterInfoStore are non-nil only when
 	// WithEKSAPI configured this Server, backing the access-entries and
-	// DescribeCluster facade endpoints respectively.
+	// ListClusters/DescribeCluster/addons facade endpoints respectively.
 	accessEntryStore AccessEntryStore
 	clusterInfoStore ClusterInfoStore
 }
@@ -48,11 +48,11 @@ func WithPodIdentity(client kubernetes.Interface, store PodIdentityStore) Server
 	}
 }
 
-// WithEKSAPI enables Server's EKS API facade endpoints (DescribeCluster and
-// the access-entries family), using client to materialize RBAC for
-// AssociateAccessPolicy, accessEntryStore to persist access entries, and
-// clusterInfoStore to resolve DescribeCluster's endpoint/certificate
-// authority.
+// WithEKSAPI enables Server's EKS API facade endpoints (ListClusters,
+// DescribeCluster, the addons family, and the access-entries family), using
+// client to materialize RBAC for AssociateAccessPolicy, accessEntryStore to
+// persist access entries, and clusterInfoStore to resolve
+// ListClusters/DescribeCluster's cluster details.
 func WithEKSAPI(client kubernetes.Interface, accessEntryStore AccessEntryStore, clusterInfoStore ClusterInfoStore) ServerOption {
 	return func(s *Server) {
 		s.client = client
@@ -84,7 +84,10 @@ func (s *Server) Handler() http.Handler {
 	}
 
 	if s.accessEntryStore != nil {
+		mux.HandleFunc("GET /clusters", s.handleListClusters)
 		mux.HandleFunc("GET /clusters/{name}", s.handleDescribeCluster)
+		mux.HandleFunc("GET /clusters/{name}/addons", s.handleListAddons)
+		mux.HandleFunc("GET /clusters/{name}/addons/{addonName}", s.handleDescribeAddon)
 		mux.HandleFunc("POST /clusters/{name}/access-entries", s.handleCreateAccessEntry)
 		mux.HandleFunc("GET /clusters/{name}/access-entries", s.handleListAccessEntries)
 		mux.HandleFunc("DELETE /clusters/{name}/access-entries", s.handleDeleteAccessEntry)

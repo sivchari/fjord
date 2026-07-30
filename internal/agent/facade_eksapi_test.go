@@ -3,6 +3,7 @@ package agent
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +15,10 @@ import (
 )
 
 const eksAPITestPrincipalARN = "arn:aws:iam::000000000000:user/alice"
+
+// eksAPITestClusterName is the cluster name reused across this file's and
+// facade_addons_test.go's test fixtures.
+const eksAPITestClusterName = "my-cluster"
 
 // testCustomGroup is a Kubernetes group name reused across this file's and
 // accessentry_test.go's/authenticator_test.go's test fixtures.
@@ -53,7 +58,7 @@ func TestHandleDescribeCluster_Success(t *testing.T) {
 	t.Parallel()
 
 	clusterInfo := NewInMemoryClusterInfoStore()
-	if err := clusterInfo.Put(t.Context(), ClusterInfo{Endpoint: "https://127.0.0.1:6443", CertificateAuthorityData: "ZmFrZQ=="}); err != nil {
+	if err := clusterInfo.Put(t.Context(), &ClusterInfo{Endpoint: "https://127.0.0.1:6443", CertificateAuthorityData: "ZmFrZQ=="}); err != nil {
 		t.Fatalf("Put cluster info: %v", err)
 	}
 
@@ -69,9 +74,153 @@ func TestHandleDescribeCluster_Success(t *testing.T) {
 		t.Fatalf("unmarshal response: %v", err)
 	}
 
-	if resp.Cluster.Name != "my-cluster" || resp.Cluster.Endpoint != "https://127.0.0.1:6443" ||
+	if resp.Cluster.Name != eksAPITestClusterName || resp.Cluster.Endpoint != "https://127.0.0.1:6443" ||
 		resp.Cluster.CertificateAuthority.Data != "ZmFrZQ==" || resp.Cluster.Status != "ACTIVE" {
 		t.Errorf("cluster = %+v, want name/endpoint/CA/status to match registered cluster info", resp.Cluster)
+	}
+}
+
+func TestDescribeClusterDetailFor(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name                string
+		clusterName         string
+		info                ClusterInfo
+		wantVersion         string
+		wantPlatformVersion string
+	}{
+		{
+			name:                "version and platform version from ClusterInfo",
+			clusterName:         eksAPITestClusterName,
+			info:                ClusterInfo{Version: "1.33", PlatformVersion: "eks.5"},
+			wantVersion:         "1.33",
+			wantPlatformVersion: "eks.5",
+		},
+		{
+			name:                "platform version defaults when ClusterInfo has none",
+			clusterName:         eksAPITestClusterName,
+			info:                ClusterInfo{Version: "1.33"},
+			wantVersion:         "1.33",
+			wantPlatformVersion: defaultPlatformVersion,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := describeClusterDetailFor(tt.clusterName, &tt.info)
+
+			if got.Version != tt.wantVersion {
+				t.Errorf("Version = %q, want %q", got.Version, tt.wantVersion)
+			}
+
+			if got.PlatformVersion != tt.wantPlatformVersion {
+				t.Errorf("PlatformVersion = %q, want %q", got.PlatformVersion, tt.wantPlatformVersion)
+			}
+		})
+	}
+}
+
+// TestDescribeClusterDetailFor_FixedShape verifies the fields
+// describeClusterDetailFor populates independently of ClusterInfo: name/arn,
+// identity, roleArn, VPC/network config, tags, health, and access config.
+func TestDescribeClusterDetailFor_FixedShape(t *testing.T) {
+	t.Parallel()
+
+	clusterName := eksAPITestClusterName
+	got := describeClusterDetailFor(clusterName, &ClusterInfo{Version: "1.33"})
+
+	if got.Name != clusterName {
+		t.Errorf("Name = %q, want %q", got.Name, clusterName)
+	}
+
+	if got.ARN != clusterARN(clusterName) {
+		t.Errorf("ARN = %q, want %q", got.ARN, clusterARN(clusterName))
+	}
+
+	wantIssuer := fmt.Sprintf("https://oidc.eks.%s.amazonaws.com/id/FJORD%s", imdsRegion, clusterName)
+	if got.Identity.OIDC.Issuer != wantIssuer {
+		t.Errorf("Identity.OIDC.Issuer = %q, want %q", got.Identity.OIDC.Issuer, wantIssuer)
+	}
+
+	wantRoleARN := fmt.Sprintf("arn:aws:iam::%s:role/fjord-cluster-role", AccountID)
+	if got.RoleARN != wantRoleARN {
+		t.Errorf("RoleARN = %q, want %q", got.RoleARN, wantRoleARN)
+	}
+
+	if got.CreatedAt == "" {
+		t.Error("CreatedAt is empty, want a fixed placeholder value")
+	}
+
+	if !got.ResourcesVPCConfig.EndpointPublicAccess || got.ResourcesVPCConfig.EndpointPrivateAccess {
+		t.Errorf("ResourcesVPCConfig = %+v, want public access only", got.ResourcesVPCConfig)
+	}
+
+	if got.KubernetesNetworkConfig.IPFamily != "ipv4" || got.KubernetesNetworkConfig.ServiceIPv4CIDR == "" {
+		t.Errorf("KubernetesNetworkConfig = %+v, want ipv4 family and a non-empty CIDR", got.KubernetesNetworkConfig)
+	}
+
+	if got.Tags == nil {
+		t.Error("Tags is nil, want a non-nil (possibly empty) map")
+	}
+
+	if got.Health.Issues == nil {
+		t.Error("Health.Issues is nil, want a non-nil (possibly empty) slice")
+	}
+
+	if got.AccessConfig.AuthenticationMode != "API" {
+		t.Errorf("AccessConfig.AuthenticationMode = %q, want %q", got.AccessConfig.AuthenticationMode, "API")
+	}
+}
+
+func TestHandleListClusters_Registered(t *testing.T) {
+	t.Parallel()
+
+	clusterInfo := NewInMemoryClusterInfoStore()
+	if err := clusterInfo.Put(t.Context(), &ClusterInfo{Name: eksAPITestClusterName, Endpoint: "https://127.0.0.1:6443"}); err != nil {
+		t.Fatalf("Put cluster info: %v", err)
+	}
+
+	server := newEKSAPITestServer(fake.NewClientset(), NewInMemoryAccessEntryStore(), clusterInfo)
+
+	rec := jsonRequest(t, server.Handler(), http.MethodGet, "/clusters", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var resp listClustersResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+
+	if len(resp.Clusters) != 1 || resp.Clusters[0] != eksAPITestClusterName {
+		t.Errorf("Clusters = %v, want [%s]", resp.Clusters, eksAPITestClusterName)
+	}
+
+	if resp.NextToken != nil {
+		t.Errorf("NextToken = %v, want nil", resp.NextToken)
+	}
+}
+
+func TestHandleListClusters_NoneRegistered(t *testing.T) {
+	t.Parallel()
+
+	server := newEKSAPITestServer(fake.NewClientset(), NewInMemoryAccessEntryStore(), NewInMemoryClusterInfoStore())
+
+	rec := jsonRequest(t, server.Handler(), http.MethodGet, "/clusters", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var resp listClustersResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+
+	if len(resp.Clusters) != 0 {
+		t.Errorf("Clusters = %v, want empty", resp.Clusters)
 	}
 }
 
