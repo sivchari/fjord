@@ -33,6 +33,17 @@ const (
 	// call to awsEndpointURL (e.g. kumo).
 	awsEndpointURLEnvName = "AWS_ENDPOINT_URL"
 
+	// Some tools do not honor the standard AWS_ENDPOINT_URL and instead read
+	// their own legacy per-service endpoint variables. External Secrets
+	// Operator is one: it reads AWS_SECRETSMANAGER_ENDPOINT / AWS_SSM_ENDPOINT
+	// / AWS_STS_ENDPOINT. Injecting these alongside the standard variables
+	// routes such tools to kumo (or fjord's STS) too, without per-tool config.
+	// The STS variant follows awsEndpointURLEnvName's STS layering: it points
+	// at fjord-agent, not kumo, so credential issuance stays coherent.
+	smEndpointEnvName        = "AWS_SECRETSMANAGER_ENDPOINT"
+	ssmEndpointEnvName       = "AWS_SSM_ENDPOINT"
+	stsLegacyEndpointEnvName = "AWS_STS_ENDPOINT"
+
 	// roleARNAnnotation is the ServiceAccount annotation
 	// amazon-eks-pod-identity-webhook keys off to decide whether a pod gets
 	// IRSA env vars and a projected token volume injected. Injector mirrors
@@ -308,11 +319,18 @@ func desiredEnvVars(opts injectionOptions) []corev1.EnvVar {
 	var envVars []corev1.EnvVar
 
 	if opts.stsEndpoint != "" {
-		envVars = append(envVars, corev1.EnvVar{Name: stsEndpointEnvName, Value: opts.stsEndpoint})
+		envVars = append(envVars,
+			corev1.EnvVar{Name: stsEndpointEnvName, Value: opts.stsEndpoint},
+			corev1.EnvVar{Name: stsLegacyEndpointEnvName, Value: opts.stsEndpoint},
+		)
 	}
 
 	if opts.awsEndpointURL != "" {
-		envVars = append(envVars, corev1.EnvVar{Name: awsEndpointURLEnvName, Value: opts.awsEndpointURL})
+		envVars = append(envVars,
+			corev1.EnvVar{Name: awsEndpointURLEnvName, Value: opts.awsEndpointURL},
+			corev1.EnvVar{Name: smEndpointEnvName, Value: opts.awsEndpointURL},
+			corev1.EnvVar{Name: ssmEndpointEnvName, Value: opts.awsEndpointURL},
+		)
 	}
 
 	if opts.injectPodIdentity {

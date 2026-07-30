@@ -56,11 +56,9 @@ var injectionPatchTestCases = []injectionPatchTestCase{
 		opts: injectionOptions{stsEndpoint: DefaultSTSEndpoint},
 		want: []patchOperation{
 			{
-				Op:   "add",
-				Path: "/spec/containers/0/env",
-				Value: []corev1.EnvVar{
-					{Name: stsEndpointEnvName, Value: DefaultSTSEndpoint},
-				},
+				Op:    "add",
+				Path:  "/spec/containers/0/env",
+				Value: stsEndpointEnvVars(DefaultSTSEndpoint),
 			},
 		},
 	},
@@ -78,13 +76,21 @@ var injectionPatchTestCases = []injectionPatchTestCase{
 				Path:  "/spec/containers/0/env/-",
 				Value: corev1.EnvVar{Name: stsEndpointEnvName, Value: DefaultSTSEndpoint},
 			},
+			{
+				Op:    "add",
+				Path:  "/spec/containers/0/env/-",
+				Value: corev1.EnvVar{Name: stsLegacyEndpointEnvName, Value: DefaultSTSEndpoint},
+			},
 		},
 	},
 	{
-		name: "container already carrying the env var is skipped",
+		name: "container already carrying every env var is skipped",
 		pod: &corev1.Pod{Spec: corev1.PodSpec{
 			Containers: []corev1.Container{
-				{Name: "app", Env: []corev1.EnvVar{{Name: stsEndpointEnvName, Value: "http://already-set"}}},
+				{Name: "app", Env: []corev1.EnvVar{
+					{Name: stsEndpointEnvName, Value: "http://already-set"},
+					{Name: stsLegacyEndpointEnvName, Value: "http://already-set"},
+				}},
 			},
 		}},
 		opts: injectionOptions{stsEndpoint: DefaultSTSEndpoint},
@@ -101,12 +107,12 @@ var injectionPatchTestCases = []injectionPatchTestCase{
 			{
 				Op:    "add",
 				Path:  "/spec/containers/0/env",
-				Value: []corev1.EnvVar{{Name: stsEndpointEnvName, Value: DefaultSTSEndpoint}},
+				Value: stsEndpointEnvVars(DefaultSTSEndpoint),
 			},
 			{
 				Op:    "add",
 				Path:  "/spec/initContainers/0/env",
-				Value: []corev1.EnvVar{{Name: stsEndpointEnvName, Value: DefaultSTSEndpoint}},
+				Value: stsEndpointEnvVars(DefaultSTSEndpoint),
 			},
 		},
 	},
@@ -114,18 +120,19 @@ var injectionPatchTestCases = []injectionPatchTestCase{
 		name: "mixed containers only patch the ones missing the env var",
 		pod: &corev1.Pod{Spec: corev1.PodSpec{
 			Containers: []corev1.Container{
-				{Name: "already-set", Env: []corev1.EnvVar{{Name: stsEndpointEnvName, Value: "x"}}},
+				{Name: "already-set", Env: []corev1.EnvVar{
+					{Name: stsEndpointEnvName, Value: "x"},
+					{Name: stsLegacyEndpointEnvName, Value: "x"},
+				}},
 				{Name: "needs-it"},
 			},
 		}},
-		opts: injectionOptions{stsEndpoint: "http://fjord-agent.kube-system.svc:8080"},
+		opts: injectionOptions{stsEndpoint: "http://custom-sts.example:9999"},
 		want: []patchOperation{
 			{
-				Op:   "add",
-				Path: "/spec/containers/1/env",
-				Value: []corev1.EnvVar{
-					{Name: stsEndpointEnvName, Value: "http://fjord-agent.kube-system.svc:8080"},
-				},
+				Op:    "add",
+				Path:  "/spec/containers/1/env",
+				Value: stsEndpointEnvVars("http://custom-sts.example:9999"),
 			},
 		},
 	},
@@ -169,12 +176,11 @@ var injectionPatchTestCases = []injectionPatchTestCase{
 			{
 				Op:   "add",
 				Path: "/spec/containers/0/env",
-				Value: []corev1.EnvVar{
-					{Name: stsEndpointEnvName, Value: DefaultSTSEndpoint},
-					{Name: podIdentityFullURIEnvName, Value: DefaultPodIdentityFullURI},
-					{Name: podIdentityAuthFileEnvName, Value: podIdentityProjectedMountPath + "/" + podIdentityProjectedFileName},
-					{Name: podIdentityAuthFileEnvNameGo, Value: podIdentityProjectedMountPath + "/" + podIdentityProjectedFileName},
-				},
+				Value: append(stsEndpointEnvVars(DefaultSTSEndpoint),
+					corev1.EnvVar{Name: podIdentityFullURIEnvName, Value: DefaultPodIdentityFullURI},
+					corev1.EnvVar{Name: podIdentityAuthFileEnvName, Value: podIdentityProjectedMountPath + "/" + podIdentityProjectedFileName},
+					corev1.EnvVar{Name: podIdentityAuthFileEnvNameGo, Value: podIdentityProjectedMountPath + "/" + podIdentityProjectedFileName},
+				),
 			},
 			{
 				Op:    "add",
@@ -221,10 +227,8 @@ var injectionPatchTestCases = []injectionPatchTestCase{
 			{
 				Op:   "add",
 				Path: "/spec/containers/0/env",
-				Value: []corev1.EnvVar{
-					{Name: stsEndpointEnvName, Value: DefaultSTSEndpoint},
-					{Name: awsEndpointURLEnvName, Value: "http://kumo.kube-system.svc:4566"},
-				},
+				Value: append(stsEndpointEnvVars(DefaultSTSEndpoint),
+					awsServiceEndpointEnvVars("http://kumo.kube-system.svc:4566")...),
 			},
 		},
 	},
@@ -238,12 +242,11 @@ var injectionPatchTestCases = []injectionPatchTestCase{
 			{
 				Op:   "add",
 				Path: "/spec/containers/0/env",
-				Value: []corev1.EnvVar{
-					{Name: awsEndpointURLEnvName, Value: "http://kumo.kube-system.svc:4566"},
-					{Name: podIdentityFullURIEnvName, Value: DefaultPodIdentityFullURI},
-					{Name: podIdentityAuthFileEnvName, Value: podIdentityProjectedMountPath + "/" + podIdentityProjectedFileName},
-					{Name: podIdentityAuthFileEnvNameGo, Value: podIdentityProjectedMountPath + "/" + podIdentityProjectedFileName},
-				},
+				Value: append(awsServiceEndpointEnvVars("http://kumo.kube-system.svc:4566"),
+					corev1.EnvVar{Name: podIdentityFullURIEnvName, Value: DefaultPodIdentityFullURI},
+					corev1.EnvVar{Name: podIdentityAuthFileEnvName, Value: podIdentityProjectedMountPath + "/" + podIdentityProjectedFileName},
+					corev1.EnvVar{Name: podIdentityAuthFileEnvNameGo, Value: podIdentityProjectedMountPath + "/" + podIdentityProjectedFileName},
+				),
 			},
 			{
 				Op:    "add",
@@ -273,8 +276,44 @@ var injectionPatchTestCases = []injectionPatchTestCase{
 				Path:  "/spec/containers/0/env/-",
 				Value: corev1.EnvVar{Name: stsEndpointEnvName, Value: DefaultSTSEndpoint},
 			},
+			{
+				Op:    "add",
+				Path:  "/spec/containers/0/env/-",
+				Value: corev1.EnvVar{Name: stsLegacyEndpointEnvName, Value: DefaultSTSEndpoint},
+			},
+			{
+				Op:    "add",
+				Path:  "/spec/containers/0/env/-",
+				Value: corev1.EnvVar{Name: smEndpointEnvName, Value: "http://kumo.kube-system.svc:4566"},
+			},
+			{
+				Op:    "add",
+				Path:  "/spec/containers/0/env/-",
+				Value: corev1.EnvVar{Name: ssmEndpointEnvName, Value: "http://kumo.kube-system.svc:4566"},
+			},
 		},
 	},
+}
+
+// stsEndpointEnvVars returns the STS endpoint env vars the injector adds for
+// a given fjord STS endpoint (the standard variable plus the legacy name some
+// tools read), used to build expected test output.
+func stsEndpointEnvVars(endpoint string) []corev1.EnvVar {
+	return []corev1.EnvVar{
+		{Name: stsEndpointEnvName, Value: endpoint},
+		{Name: stsLegacyEndpointEnvName, Value: endpoint},
+	}
+}
+
+// awsServiceEndpointEnvVars returns the non-STS endpoint env vars the injector
+// adds for a given emulator endpoint (the standard AWS_ENDPOINT_URL plus the
+// per-service legacy names ESO and similar tools read).
+func awsServiceEndpointEnvVars(endpoint string) []corev1.EnvVar {
+	return []corev1.EnvVar{
+		{Name: awsEndpointURLEnvName, Value: endpoint},
+		{Name: smEndpointEnvName, Value: endpoint},
+		{Name: ssmEndpointEnvName, Value: endpoint},
+	}
 }
 
 // podIdentityTokenVolume returns the projected ServiceAccount token volume
