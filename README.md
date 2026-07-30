@@ -78,6 +78,18 @@ kubectl --context fjord-alice@fjord get pods     # allowed by the View policy
 
 The standard access policies map to the built-in Kubernetes roles: `ClusterAdmin` -> `cluster-admin`, `Admin` -> `admin`, `Edit` -> `edit`, `View` -> `view`.
 
+## EKS API facade
+
+fjord answers the read side of the EKS API, so `aws eks`, `eksctl`, and terraform's `aws_eks_cluster` data source can inspect it like a real cluster:
+
+```console
+aws eks list-clusters   --endpoint-url http://localhost:48080
+aws eks describe-cluster --name fjord --endpoint-url http://localhost:48080   # version, oidc issuer, networkConfig, accessConfig, ...
+aws eks list-addons     --cluster-name fjord --endpoint-url http://localhost:48080   # coredns, kube-proxy, eks-pod-identity-agent
+```
+
+`describe-addon` reports only the addons fjord actually runs; asking for one it does not (e.g. `vpc-cni`, since fjord uses kindnet) returns `ResourceNotFoundException`, matching EKS.
+
 ## LoadBalancer services
 
 `--with-loadbalancer` deploys [metallb](https://metallb.io/) in L2 mode with an address pool carved from the kind docker network, so `type: LoadBalancer` Services get a reachable external IP instead of staying `<pending>`.
