@@ -1,6 +1,26 @@
 package kind
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
+
+func TestInotifySysctlConf(t *testing.T) {
+	t.Parallel()
+
+	got := inotifySysctlConf()
+
+	want := "# Managed by fjord: inotify limits kube-proxy and kubelet need.\n" +
+		"fs.inotify.max_user_instances = 512\n" +
+		"fs.inotify.max_user_watches = 524288\n"
+	if got != want {
+		t.Errorf("inotifySysctlConf() = %q, want %q", got, want)
+	}
+
+	if !strings.HasSuffix(got, "\n") {
+		t.Error("inotifySysctlConf() must end with a newline for sysctl.d parsing")
+	}
+}
 
 func TestNeedsSysctlRaise(t *testing.T) {
 	t.Parallel()

@@ -2,6 +2,7 @@ package kind
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -18,9 +19,16 @@ var minInotifySysctls = map[string]int{
 	"fs.inotify.max_user_instances": 512,
 }
 
+// inotifySysctlConfPath is where raiseInotifyLimits persists the limits on
+// each node. The node's shared VM kernel (Docker Desktop) resets sysctls on
+// VM restart; systemd-sysctl re-applies this file when the node container
+// boots, so the limits survive.
+const inotifySysctlConfPath = "/etc/sysctl.d/99-fjord-inotify.conf"
+
 // raiseInotifyLimits raises the inotify sysctls on every node of the cluster
-// to at least the recommended minimum. Values already at or above the minimum
-// are left untouched.
+// to at least the recommended minimum and persists them under
+// /etc/sysctl.d so node restarts re-apply them. Values already at or above
+// the minimum are left untouched for the running kernel.
 func (p *provider) raiseInotifyLimits(name string) error {
 	nodes, err := p.inner.ListNodes(name)
 	if err != nil {
@@ -48,9 +56,39 @@ func (p *provider) raiseInotifyLimits(name string) error {
 				return fmt.Errorf("set %s on node %s: %w", set, node.String(), err)
 			}
 		}
+
+		conf := inotifySysctlConf()
+
+		cmd := node.Command("cp", "/dev/stdin", inotifySysctlConfPath)
+		cmd.SetStdin(strings.NewReader(conf))
+
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("persist %s on node %s: %w", inotifySysctlConfPath, node.String(), err)
+		}
 	}
 
 	return nil
+}
+
+// inotifySysctlConf renders the sysctl.d file body persisting
+// minInotifySysctls, with keys in deterministic order.
+func inotifySysctlConf() string {
+	keys := make([]string, 0, len(minInotifySysctls))
+	for key := range minInotifySysctls {
+		keys = append(keys, key)
+	}
+
+	sort.Strings(keys)
+
+	var b strings.Builder
+
+	b.WriteString("# Managed by fjord: inotify limits kube-proxy and kubelet need.\n")
+
+	for _, key := range keys {
+		fmt.Fprintf(&b, "%s = %d\n", key, minInotifySysctls[key])
+	}
+
+	return b.String()
 }
 
 // needsSysctlRaise reports whether a sysctl currently at value current must
