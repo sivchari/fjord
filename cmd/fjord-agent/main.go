@@ -98,25 +98,32 @@ func newServeAPICmd() *cobra.Command {
 		"AWS_ENDPOINT_URL_STS value the injector webhook injects into IRSA pods")
 	cmd.Flags().StringVar(&opts.awsEndpointURL, "aws-endpoint-url", "",
 		"AWS_ENDPOINT_URL value the injector webhook injects into IAM-identity pods for non-STS AWS calls (e.g. a local AWS emulator); empty disables it")
+	cmd.Flags().BoolVar(&opts.enableLoadBalancer, "enable-loadbalancer", false,
+		"start the LoadBalancer controller (agent.LoadBalancerController), which claims type: LoadBalancer Services with the cluster's node address(es); "+
+			"off by default because on kind clusters metallb owns LoadBalancer Services and two implementations racing on status would fight -- "+
+			"the fjord CLI enables this for rask-backed clusters, whose hostproc substrate has no metallb")
 
 	return cmd
 }
 
 // apiServeOptions carries `serve api`'s flag values.
 type apiServeOptions struct {
-	port           int
-	injectorPort   int
-	tlsCertFile    string
-	tlsKeyFile     string
-	stsEndpoint    string
-	awsEndpointURL string
+	port               int
+	injectorPort       int
+	tlsCertFile        string
+	tlsKeyFile         string
+	stsEndpoint        string
+	awsEndpointURL     string
+	enableLoadBalancer bool
 }
 
 // serveAPI builds an in-cluster Kubernetes client, wires it to the fake STS
 // API server, (unless opts.injectorPort is 0) the IRSA injector webhook, the
-// ClusterNetworkPolicy controller (agent.CNPController), and the
+// ClusterNetworkPolicy controller (agent.CNPController), the
 // TargetGroupBinding controller (agent.TargetGroupBindingController), and
-// serves until the process receives a termination signal.
+// (if opts.enableLoadBalancer) the LoadBalancer controller
+// (agent.LoadBalancerController), and serves until the process receives a
+// termination signal.
 func serveAPI(cmd *cobra.Command, opts *apiServeOptions) error {
 	config, err := rest.InClusterConfig()
 	if err != nil {
@@ -135,6 +142,10 @@ func serveAPI(cmd *cobra.Command, opts *apiServeOptions) error {
 
 	defer startCNPController(cmd, clientset, dynamicClient)()
 	defer startTargetGroupBindingController(cmd.Context(), clientset, dynamicClient)()
+
+	if opts.enableLoadBalancer {
+		defer startLoadBalancerController(cmd, clientset)()
+	}
 
 	podIdentityStore := agent.NewConfigMapPodIdentityStore(clientset)
 	accessEntryStore := agent.NewConfigMapAccessEntryStore(clientset)
