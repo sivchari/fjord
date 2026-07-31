@@ -49,7 +49,8 @@ func newUpdateKubeconfigCmd(logger logger.Logger) *cobra.Command {
 
 	opts.registerFlags(cmd)
 	cmd.Flags().StringVar(&opts.principal, "principal", "", "principal name registered via \"fjord create principal\"")
-	cmd.Flags().Int32Var(&opts.hostPort, "agent-host-port", defaultAgentHostPort, "host port fjord-agent's fake STS API is published on")
+	cmd.Flags().Int32Var(&opts.hostPort, "agent-host-port", defaultAgentHostPort,
+		"host port fjord-agent's fake STS API is published on (default: 48080 for --provider kind, 30080 for --provider rask)")
 
 	_ = cmd.MarkFlagRequired("principal")
 
@@ -66,6 +67,8 @@ func runUpdateKubeconfig(cmd *cobra.Command, logger logger.Logger, opts *updateK
 	if err != nil {
 		return fmt.Errorf("resolve principal %q: %w", opts.principal, err)
 	}
+
+	opts.hostPort = resolveAgentHostPort(cmd.Flags().Changed("agent-host-port"), opts.provider, opts.hostPort)
 
 	sourceCluster, err := loadKindClusterConfig(opts.context())
 	if err != nil {

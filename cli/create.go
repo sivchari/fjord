@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -19,8 +20,8 @@ import (
 	"github.com/sivchari/fjord/internal/agent"
 	"github.com/sivchari/fjord/internal/authn"
 	"github.com/sivchari/fjord/internal/cluster"
+	"github.com/sivchari/fjord/internal/componentdir"
 	"github.com/sivchari/fjord/internal/eksd"
-	"github.com/sivchari/fjord/internal/kind"
 	"github.com/sivchari/fjord/internal/logger"
 	"github.com/sivchari/fjord/internal/nodeimage"
 	"github.com/sivchari/fjord/internal/pki"
@@ -30,7 +31,8 @@ import (
 const (
 	defaultClusterName = "fjord"
 	// defaultAgentHostPort is the default host port fjord-agent's fake STS
-	// API is published on.
+	// API is published on (kind only; rask publishes no mapping and is
+	// always reached at cluster.AgentNodePort, see resolveAgentHostPort).
 	defaultAgentHostPort = 48080
 )
 
@@ -49,6 +51,7 @@ func newCreateCmd(logger logger.Logger) *cobra.Command {
 type createClusterOptions struct {
 	eksVersion       string
 	name             string
+	provider         string
 	buildLocal       bool
 	wait             time.Duration
 	enableAuth       bool
@@ -74,11 +77,12 @@ func newCreateClusterCmd(logger logger.Logger) *cobra.Command {
 
 	cmd.Flags().StringVar(&opts.eksVersion, "eks-version", "", "EKS version to emulate (default: latest supported)")
 	cmd.Flags().StringVar(&opts.name, "name", defaultClusterName, "cluster name")
-	cmd.Flags().BoolVar(&opts.buildLocal, "build-local", false, "build the node image locally instead of pulling the prebuilt image")
+	cmd.Flags().StringVar(&opts.provider, "provider", providerKind, providerFlagUsage)
+	cmd.Flags().BoolVar(&opts.buildLocal, "build-local", false, "build the node image locally instead of pulling the prebuilt image (kind only; rask always materializes EKS-D components from the resolved release)")
 	cmd.Flags().DurationVar(&opts.wait, "wait", 2*time.Minute, "wait for the control plane to be ready (0 to disable)")
 	cmd.Flags().BoolVar(&opts.enableAuth, "enable-auth", true, "deploy fjord-agent for EKS-compatible AWS authentication")
 	cmd.Flags().StringVar(&opts.agentImage, "agent-image", "", "fjord-agent image to deploy (default: "+agentImageRepository+":<version>, or a locally built image with --build-local)")
-	cmd.Flags().Int32Var(&opts.hostPort, "agent-host-port", defaultAgentHostPort, "host port fjord-agent's fake STS API is published on")
+	cmd.Flags().Int32Var(&opts.hostPort, "agent-host-port", defaultAgentHostPort, "host port fjord-agent's fake STS API is published on (kind only; rask is always reachable on localhost:30080)")
 	cmd.Flags().StringVar(&opts.nodeRoleName, "node-role-name", agent.DefaultNodeRoleName,
 		"IAM role name fjord-imds advertises as the node's instance role")
 	cmd.Flags().BoolVar(&opts.withKumo, "with-kumo", true,
@@ -87,12 +91,16 @@ func newCreateClusterCmd(logger logger.Logger) *cobra.Command {
 	cmd.Flags().StringVar(&opts.awsEndpointURL, "aws-endpoint-url", "",
 		"AWS_ENDPOINT_URL value to inject into IAM-identity pods for non-STS AWS calls, overriding --with-kumo's own endpoint (e.g. to point at an external kumo/LocalStack instance)")
 	cmd.Flags().BoolVar(&opts.withLoadBalancer, "with-loadbalancer", false,
-		"deploy metallb so type: LoadBalancer Services get an external IP from the kind docker network")
+		"deploy metallb so type: LoadBalancer Services get an external IP from the kind docker network (kind only)")
 
 	return cmd
 }
 
 func runCreateCluster(ctx context.Context, logger logger.Logger, opts *createClusterOptions) error {
+	if err := validateCreateClusterOptions(opts, runtime.GOOS); err != nil {
+		return err
+	}
+
 	eksVersion := opts.eksVersion
 	if eksVersion == "" {
 		eksVersion = latestVersion(eksd.SupportedVersions())
@@ -103,26 +111,24 @@ func runCreateCluster(ctx context.Context, logger logger.Logger, opts *createClu
 		return fmt.Errorf("resolve eks version: %w", err)
 	}
 
-	image, err := resolveNodeImage(ctx, logger, opts, release)
-	if err != nil {
-		return err
-	}
-
-	config, ca, err := buildKindConfig(opts, release)
+	config, ca, err := buildClusterConfig(opts, release)
 	if err != nil {
 		return err
 	}
 
 	logger.V(0).Infof("Creating cluster %q (EKS %s / %s) ...", opts.name, release.EKSVersion, release.KubeVersion)
 
-	provider := kind.NewProvider(logger)
-
-	err = provider.CreateCluster(ctx, opts.name, clusterprovider.CreateOptions{
-		NodeImage:    image,
-		Config:       config,
-		WaitForReady: opts.wait,
-	})
+	provider, err := newClusterProvider(opts.provider, logger)
 	if err != nil {
+		return err
+	}
+
+	createOpts, err := buildCreateOptions(ctx, logger, opts, config, release)
+	if err != nil {
+		return err
+	}
+
+	if err := provider.CreateCluster(ctx, opts.name, createOpts); err != nil {
 		return fmt.Errorf("create cluster: %w", err)
 	}
 
@@ -147,7 +153,72 @@ func runCreateCluster(ctx context.Context, logger logger.Logger, opts *createClu
 		}
 	}
 
-	logger.V(0).Infof("Cluster %q is ready. Set kubectl context to \"kind-%s\".", opts.name, opts.name)
+	logger.V(0).Info(clusterReadyMessage(opts))
+
+	return nil
+}
+
+// buildCreateOptions builds the clusterprovider.CreateOptions for opts,
+// resolving the node components the provider-specific way: a component
+// directory materialized from release's EKS-D server tarball for rask, or a
+// node image tag (prebuilt, or freshly built with --build-local) for kind.
+func buildCreateOptions(ctx context.Context, logger logger.Logger, opts *createClusterOptions, config *clusterprovider.Config, release *eksd.Release) (clusterprovider.CreateOptions, error) {
+	createOpts := clusterprovider.CreateOptions{
+		Config:       config,
+		WaitForReady: opts.wait,
+	}
+
+	if opts.provider != providerRask {
+		image, err := resolveNodeImage(ctx, logger, opts, release)
+		if err != nil {
+			return clusterprovider.CreateOptions{}, err
+		}
+
+		createOpts.NodeImage = image
+
+		return createOpts, nil
+	}
+
+	componentDir, err := componentdir.Materialize(ctx, release, buildArch())
+	if err != nil {
+		return clusterprovider.CreateOptions{}, fmt.Errorf("materialize eks-d components: %w", err)
+	}
+
+	logger.V(0).Infof("Using EKS-D components at %s ...", componentDir)
+
+	createOpts.ComponentDir = componentDir
+
+	return createOpts, nil
+}
+
+// clusterReadyMessage builds the final "cluster is ready" message for opts,
+// naming the kubectl context to use and, when auth is enabled, the endpoint
+// fjord-agent's fake STS API is reachable at.
+func clusterReadyMessage(opts *createClusterOptions) string {
+	message := fmt.Sprintf("Cluster %q is ready. Set kubectl context to %q.", opts.name, clusterContextName(opts.provider, opts.name))
+
+	if opts.enableAuth {
+		message += fmt.Sprintf(" fjord-agent's fake STS API is reachable at localhost:%d.", resolveAgentHostPort(false, opts.provider, opts.hostPort))
+	}
+
+	return message
+}
+
+// validateCreateClusterOptions rejects create cluster requests the selected
+// provider cannot satisfy. goos is injected (rather than reading
+// runtime.GOOS internally) so the darwin+rask case is unit-testable.
+func validateCreateClusterOptions(opts *createClusterOptions, goos string) error {
+	if opts.provider != providerRask {
+		return nil
+	}
+
+	if goos == "darwin" {
+		return errors.New("--provider rask is not supported on macOS: rask's vz substrate does not yet support --component-dir (per-cluster initramfs is not implemented), so EKS Distro components cannot run; use --provider kind on macOS for now")
+	}
+
+	if opts.withLoadBalancer {
+		return errors.New("--with-loadbalancer is not supported with --provider rask: metallb's address pool is carved from the kind docker network, which does not exist under rask; support is planned but not yet implemented")
+	}
 
 	return nil
 }
@@ -188,7 +259,8 @@ func applyEKSDefaultState(ctx context.Context, logger logger.Logger, provider cl
 
 // deployLoadBalancer deploys metallb so type: LoadBalancer Services get an
 // external IP, using an address range carved out of the cluster's kind docker
-// network subnet.
+// network subnet. It is kind-only: validateCreateClusterOptions rejects
+// --with-loadbalancer with --provider rask before this is ever called.
 func deployLoadBalancer(ctx context.Context, logger logger.Logger, provider clusterprovider.Provider, name string) error {
 	subnet, err := dockerNetworkSubnet(ctx)
 	if err != nil {
@@ -219,25 +291,35 @@ func deployLoadBalancer(ctx context.Context, logger logger.Logger, provider clus
 	return nil
 }
 
-// buildKindConfig builds the clusterprovider.Config for opts and release.
+// buildClusterConfig builds the clusterprovider.Config for opts and release.
 // When auth is enabled it also generates the fjord CA and stages the
 // authenticator's static pod manifest, webhook kubeconfig, and TLS
 // certificate (see stageAuthenticator), wiring the result into the returned
 // Config's ExtraMounts and AuthWebhook: both must exist before the cluster
-// is created, since kind delivers them into the control-plane node as part
-// of cluster creation itself, before the API server ever starts. The
+// is created, since both providers deliver them into the control-plane node
+// as part of cluster creation itself, before the API server ever starts. The
 // returned CA is nil when auth is disabled; otherwise it is reused later for
 // IRSA/pod-identity-webhook's serving certificates, so the webhook
 // kubeconfig's trust and every fjord-issued certificate share one root.
-func buildKindConfig(opts *createClusterOptions, release *eksd.Release) (*clusterprovider.Config, *pki.CA, error) {
+func buildClusterConfig(opts *createClusterOptions, release *eksd.Release) (*clusterprovider.Config, *pki.CA, error) {
 	coreDNSRepo, coreDNSTag := coreDNSKubeadmRepository(release.CoreDNSImage)
+
+	// HostPort is kind-specific: it configures an ExtraPortMappings host
+	// port, which rask has no equivalent of (its hostproc runtime shares
+	// the host network namespace and needs no mapping). Leaving it zero
+	// for rask also avoids the rask provider's own warning for a HostPort
+	// value the CLI itself would otherwise have chosen.
+	var hostPort int32
+	if opts.provider != providerRask {
+		hostPort = agentHostPort(opts.enableAuth, opts.hostPort)
+	}
 
 	config := &clusterprovider.Config{
 		Name:                   opts.name,
 		KubeVersion:            release.KubeVersion,
 		CoreDNSImageRepository: coreDNSRepo,
 		CoreDNSImageTag:        coreDNSTag,
-		HostPort:               agentHostPort(opts.enableAuth, opts.hostPort),
+		HostPort:               hostPort,
 	}
 
 	if !opts.enableAuth {
@@ -298,7 +380,8 @@ func authnStagingDir(name string) (string, error) {
 
 // resolveNodeImage returns the node image tag to use for release: the
 // prebuilt floating tag, or a freshly built local image when
-// opts.buildLocal is set.
+// opts.buildLocal is set. It is kind-only: rask nodes run from a component
+// directory (see componentdir.Materialize), not a node image.
 func resolveNodeImage(ctx context.Context, logger logger.Logger, opts *createClusterOptions, release *eksd.Release) (string, error) {
 	if !opts.buildLocal {
 		return nodeimage.FloatingTag(release), nil
@@ -486,8 +569,8 @@ func deployAuthenticator(ctx context.Context, logger logger.Logger, provider clu
 }
 
 // ensureClusterInfo registers name's API server endpoint, certificate
-// authority (read from kind's own kubeconfig for the cluster), and EKS
-// version in fjord-agent's ClusterInfo store, so the EKS API facade's
+// authority (read from the provider's own kubeconfig for the cluster), and
+// EKS version in fjord-agent's ClusterInfo store, so the EKS API facade's
 // DescribeCluster and ListClusters endpoints (which `fjord update-kubeconfig`
 // and standard EKS tooling call) can serve them.
 func ensureClusterInfo(ctx context.Context, provider clusterprovider.Provider, client kubernetes.Interface, name, eksVersion string) error {

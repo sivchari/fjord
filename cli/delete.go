@@ -5,7 +5,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/sivchari/fjord/internal/kind"
 	"github.com/sivchari/fjord/internal/logger"
 )
 
@@ -21,7 +20,10 @@ func newDeleteCmd(logger logger.Logger) *cobra.Command {
 }
 
 func newDeleteClusterCmd(logger logger.Logger) *cobra.Command {
-	var name string
+	var (
+		name     string
+		provider string
+	)
 
 	cmd := &cobra.Command{
 		Use:   "cluster",
@@ -29,8 +31,12 @@ func newDeleteClusterCmd(logger logger.Logger) *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			logger.V(0).Infof("Deleting cluster %q ...", name)
 
-			provider := kind.NewProvider(logger)
-			if err := provider.DeleteCluster(cmd.Context(), name, ""); err != nil {
+			clusterProvider, err := newClusterProvider(provider, logger)
+			if err != nil {
+				return err
+			}
+
+			if err := clusterProvider.DeleteCluster(cmd.Context(), name, ""); err != nil {
 				return fmt.Errorf("delete cluster: %w", err)
 			}
 
@@ -39,6 +45,7 @@ func newDeleteClusterCmd(logger logger.Logger) *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&name, "name", defaultClusterName, "cluster name")
+	cmd.Flags().StringVar(&provider, "provider", providerKind, providerFlagUsage)
 
 	return cmd
 }

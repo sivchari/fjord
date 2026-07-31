@@ -27,9 +27,12 @@ const (
 	agentNodePortServiceName = "fjord-agent-nodeport"
 	// agentPort is the port fjord-agent's fake STS API listens on.
 	agentPort = 8080
-	// agentNodePort is the NodePort fjord-agent's fake STS API is published
-	// on, matching internal/provider.Config's HostPort translation target.
-	agentNodePort = 30080
+
+	// AgentNodePort is the NodePort fjord-agent's fake STS API is published
+	// on, matching internal/provider.Config's HostPort translation target
+	// (kind) or the port reachable directly on the host (rask, whose
+	// hostproc runtime shares the host network namespace).
+	AgentNodePort = 30080
 
 	// AgentTLSCertName is the Secret fjord-agent's IRSA injector webhook
 	// TLS certificate is stored in and mounted from, when EnsureAgent is
@@ -422,7 +425,7 @@ func ensureNodePortService(ctx context.Context, client kubernetes.Interface) err
 			Type:     corev1.ServiceTypeNodePort,
 			Selector: agentLabels,
 			Ports: []corev1.ServicePort{
-				{Name: "http", Port: agentPort, TargetPort: intstr.FromInt32(agentPort), NodePort: agentNodePort},
+				{Name: "http", Port: agentPort, TargetPort: intstr.FromInt32(agentPort), NodePort: AgentNodePort},
 			},
 		},
 	}

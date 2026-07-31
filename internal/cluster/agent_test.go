@@ -186,7 +186,7 @@ func assertAgentResources(t *testing.T, client *fake.Clientset, image string) {
 		t.Fatalf("get nodeport service: %v", err)
 	}
 
-	if len(nodePortSvc.Spec.Ports) != 1 || nodePortSvc.Spec.Ports[0].NodePort != agentNodePort {
-		t.Errorf("nodeport service ports = %+v, want NodePort %d", nodePortSvc.Spec.Ports, agentNodePort)
+	if len(nodePortSvc.Spec.Ports) != 1 || nodePortSvc.Spec.Ports[0].NodePort != AgentNodePort {
+		t.Errorf("nodeport service ports = %+v, want NodePort %d", nodePortSvc.Spec.Ports, AgentNodePort)
 	}
 }
