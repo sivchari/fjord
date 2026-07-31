@@ -4,7 +4,7 @@ BINARY_NAME=fjord
 VERSION?=$(shell grep 'const Version' version.go | cut -d'"' -f2)
 BUILD_DIR=bin
 GOLANGCI_LINT=go tool -modfile tools/go.mod golangci-lint
-GOTOOLCHAIN=go1.25.10
+GOTOOLCHAIN=go1.26.3
 export GOTOOLCHAIN
 
 # Build
