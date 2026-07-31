@@ -117,7 +117,7 @@ func runCreateCluster(ctx context.Context, logger logger.Logger, opts *createClu
 
 	provider := kind.NewProvider(logger)
 
-	err = provider.CreateCluster(opts.name, clusterprovider.CreateOptions{
+	err = provider.CreateCluster(ctx, opts.name, clusterprovider.CreateOptions{
 		NodeImage:    image,
 		Config:       config,
 		WaitForReady: opts.wait,
@@ -404,7 +404,7 @@ func deployAgent(ctx context.Context, logger logger.Logger, provider clusterprov
 
 		logger.V(0).Infof("Loading fjord-agent image %s into cluster %q ...", image, opts.name)
 
-		if err := provider.LoadDockerImage(opts.name, image); err != nil {
+		if err := provider.LoadDockerImage(ctx, opts.name, image); err != nil {
 			return fmt.Errorf("load agent image: %w", err)
 		}
 	}

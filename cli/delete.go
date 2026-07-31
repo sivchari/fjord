@@ -26,11 +26,11 @@ func newDeleteClusterCmd(logger logger.Logger) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "cluster",
 		Short: "Delete a cluster",
-		RunE: func(_ *cobra.Command, _ []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			logger.V(0).Infof("Deleting cluster %q ...", name)
 
 			provider := kind.NewProvider(logger)
-			if err := provider.DeleteCluster(name, ""); err != nil {
+			if err := provider.DeleteCluster(cmd.Context(), name, ""); err != nil {
 				return fmt.Errorf("delete cluster: %w", err)
 			}
 

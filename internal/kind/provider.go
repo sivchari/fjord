@@ -1,6 +1,7 @@
 package kind
 
 import (
+	"context"
 	"fmt"
 
 	kindcluster "sigs.k8s.io/kind/pkg/cluster"
@@ -28,8 +29,11 @@ func NewProvider(logger logger.Logger) clusterprovider.Provider {
 	}
 }
 
-// CreateCluster implements clusterprovider.Provider.
-func (p *provider) CreateCluster(name string, opts clusterprovider.CreateOptions) error {
+// CreateCluster implements clusterprovider.Provider. kind's own Create call
+// predates context.Context and cannot be cancelled once started, but ctx is
+// honored for the inotify limits raised against the cluster's nodes
+// afterwards.
+func (p *provider) CreateCluster(ctx context.Context, name string, opts clusterprovider.CreateOptions) error {
 	createOpts := []kindcluster.CreateOption{
 		kindcluster.CreateWithDisplayUsage(false),
 		kindcluster.CreateWithDisplaySalutation(false),
@@ -51,11 +55,13 @@ func (p *provider) CreateCluster(name string, opts clusterprovider.CreateOptions
 		return fmt.Errorf("create cluster %q: %w", name, err)
 	}
 
-	return p.raiseInotifyLimits(name)
+	return p.raiseInotifyLimits(ctx, name)
 }
 
-// DeleteCluster implements clusterprovider.Provider.
-func (p *provider) DeleteCluster(name, kubeconfigPath string) error {
+// DeleteCluster implements clusterprovider.Provider. kind's own Delete call
+// predates context.Context, so ctx is accepted for interface conformance but
+// cannot be passed down.
+func (p *provider) DeleteCluster(_ context.Context, name, kubeconfigPath string) error {
 	if err := p.inner.Delete(name, kubeconfigPath); err != nil {
 		return fmt.Errorf("delete cluster %q: %w", name, err)
 	}

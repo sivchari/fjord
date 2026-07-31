@@ -1,6 +1,7 @@
 package kind
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strconv"
@@ -29,7 +30,7 @@ const inotifySysctlConfPath = "/etc/sysctl.d/99-fjord-inotify.conf"
 // to at least the recommended minimum and persists them under
 // /etc/sysctl.d so node restarts re-apply them. Values already at or above
 // the minimum are left untouched for the running kernel.
-func (p *provider) raiseInotifyLimits(name string) error {
+func (p *provider) raiseInotifyLimits(ctx context.Context, name string) error {
 	nodes, err := p.inner.ListNodes(name)
 	if err != nil {
 		return fmt.Errorf("list nodes for cluster %q: %w", name, err)
@@ -37,7 +38,7 @@ func (p *provider) raiseInotifyLimits(name string) error {
 
 	for _, node := range nodes {
 		for key, minimum := range minInotifySysctls {
-			lines, err := exec.OutputLines(node.Command("sysctl", "-n", key))
+			lines, err := exec.OutputLines(node.CommandContext(ctx, "sysctl", "-n", key))
 			if err != nil {
 				return fmt.Errorf("read %s on node %s: %w", key, node.String(), err)
 			}
@@ -52,14 +53,14 @@ func (p *provider) raiseInotifyLimits(name string) error {
 			}
 
 			set := fmt.Sprintf("%s=%d", key, minimum)
-			if err := node.Command("sysctl", "-w", set).Run(); err != nil {
+			if err := node.CommandContext(ctx, "sysctl", "-w", set).Run(); err != nil {
 				return fmt.Errorf("set %s on node %s: %w", set, node.String(), err)
 			}
 		}
 
 		conf := inotifySysctlConf()
 
-		cmd := node.Command("cp", "/dev/stdin", inotifySysctlConfPath)
+		cmd := node.CommandContext(ctx, "cp", "/dev/stdin", inotifySysctlConfPath)
 		cmd.SetStdin(strings.NewReader(conf))
 
 		if err := cmd.Run(); err != nil {

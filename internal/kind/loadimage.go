@@ -15,7 +15,7 @@ import (
 // docker image imageRef and loads it onto every node of the cluster named
 // name, equivalent to `kind load docker-image`. imageRef must already exist
 // in the local docker image store (e.g. built via `docker build`).
-func (p *provider) LoadDockerImage(name, imageRef string) error {
+func (p *provider) LoadDockerImage(ctx context.Context, name, imageRef string) error {
 	nodeList, err := p.inner.ListInternalNodes(name)
 	if err != nil {
 		return fmt.Errorf("list nodes for cluster %q: %w", name, err)
@@ -25,7 +25,7 @@ func (p *provider) LoadDockerImage(name, imageRef string) error {
 		return fmt.Errorf("no nodes found for cluster %q", name)
 	}
 
-	tarPath, cleanup, err := saveDockerImage(imageRef)
+	tarPath, cleanup, err := saveDockerImage(ctx, imageRef)
 	if err != nil {
 		return err
 	}
@@ -43,7 +43,7 @@ func (p *provider) LoadDockerImage(name, imageRef string) error {
 
 // saveDockerImage runs `docker save` to export imageRef into a temporary
 // tarball, returning its path and a cleanup function that removes it.
-func saveDockerImage(imageRef string) (tarPath string, cleanup func(), err error) {
+func saveDockerImage(ctx context.Context, imageRef string) (tarPath string, cleanup func(), err error) {
 	dir, err := os.MkdirTemp("", "fjord-load-image")
 	if err != nil {
 		return "", nil, fmt.Errorf("create temp dir: %w", err)
@@ -52,7 +52,7 @@ func saveDockerImage(imageRef string) (tarPath string, cleanup func(), err error
 	cleanup = func() { _ = os.RemoveAll(dir) }
 	tarPath = filepath.Join(dir, "image.tar")
 
-	if out, err := exec.CommandContext(context.Background(), "docker", "save", "-o", tarPath, imageRef).CombinedOutput(); err != nil {
+	if out, err := exec.CommandContext(ctx, "docker", "save", "-o", tarPath, imageRef).CombinedOutput(); err != nil {
 		cleanup()
 
 		return "", nil, fmt.Errorf("docker save %q: %w: %s", imageRef, err, out)
