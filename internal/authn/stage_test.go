@@ -185,16 +185,8 @@ func assertWebhook(t *testing.T, staged *authn.StagedAuthn) {
 		t.Errorf("Webhook.ConfigFilePath = %q, want %q", got, want)
 	}
 
-	if got, want := staged.Webhook.VolumeHostPath, nodeAuthnDirWant; got != want {
-		t.Errorf("Webhook.VolumeHostPath = %q, want %q", got, want)
-	}
-
 	if got, want := staged.Webhook.VolumeMountPath, nodeAuthnDirWant; got != want {
 		t.Errorf("Webhook.VolumeMountPath = %q, want %q", got, want)
-	}
-
-	if staged.Webhook.VolumeName == "" {
-		t.Errorf("Webhook.VolumeName is empty")
 	}
 }
 

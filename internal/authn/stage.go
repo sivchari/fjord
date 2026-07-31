@@ -27,10 +27,10 @@ const (
 	// authenticator's TLS material and webhook kubeconfig.
 	authnDirName = "authn"
 
-	// nodeAuthnDir is where the authn subdirectory is mounted inside the
-	// control-plane node, matching provider.AuthWebhook.VolumeHostPath /
-	// VolumeMountPath and the ConfigFilePath's parent directory. The
-	// authenticator DaemonSet also hostPath-mounts it for its TLS material.
+	// nodeAuthnDir is where the authn subdirectory is delivered inside the
+	// cluster, matching provider.AuthWebhook.VolumeMountPath and the
+	// ConfigFilePath's parent directory. The authenticator DaemonSet also
+	// hostPath-mounts it for its TLS material.
 	nodeAuthnDir = "/etc/fjord/authn"
 
 	tlsCertFileName = "tls.crt"
@@ -102,8 +102,6 @@ func Stage(baseDir string, ca *pki.CA) (*StagedAuthn, error) {
 		},
 		Webhook: &provider.AuthWebhook{
 			ConfigFilePath:  nodeAuthnDir + "/" + webhookFileName,
-			VolumeName:      "fjord-authn",
-			VolumeHostPath:  nodeAuthnDir,
 			VolumeMountPath: nodeAuthnDir,
 		},
 	}, nil

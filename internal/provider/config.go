@@ -10,15 +10,12 @@ type Mount struct {
 // webhook. The webhook config file and its directory are delivered to the
 // node via Config.ExtraMounts.
 type AuthWebhook struct {
-	// ConfigFilePath is the path, inside the API server container, to the
+	// ConfigFilePath is the path, inside the cluster, to the
 	// authentication-token-webhook-config-file.
 	ConfigFilePath string
-	// VolumeName names the extra volume mounting the config file's directory
-	// into the API server static pod.
-	VolumeName string
-	// VolumeHostPath is that directory's path on the node, and
-	// VolumeMountPath where it mounts inside the API server container.
-	VolumeHostPath  string
+	// VolumeMountPath is the in-cluster directory the config file's
+	// ExtraMounts entry is delivered to; the rask provider matches it
+	// against Mount.ContainerPath to locate the owning mount.
 	VolumeMountPath string
 }
 
