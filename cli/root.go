@@ -7,6 +7,7 @@ import (
 	"github.com/spf13/cobra"
 
 	fjord "github.com/sivchari/fjord"
+	"github.com/sivchari/fjord/internal/logger"
 )
 
 // NewRootCmd returns the root fjord command.
@@ -20,7 +21,7 @@ func NewRootCmd() *cobra.Command {
 		SilenceErrors: true,
 	}
 
-	logger := newLogger(os.Stderr, 0)
+	logger := logger.NewStderr(os.Stderr, 0)
 
 	cmd.AddCommand(newCreateCmd(logger))
 	cmd.AddCommand(newDeleteCmd(logger))

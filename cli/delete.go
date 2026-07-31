@@ -4,12 +4,12 @@ import (
 	"fmt"
 
 	"github.com/spf13/cobra"
-	"sigs.k8s.io/kind/pkg/log"
 
 	"github.com/sivchari/fjord/internal/kind"
+	"github.com/sivchari/fjord/internal/logger"
 )
 
-func newDeleteCmd(logger log.Logger) *cobra.Command {
+func newDeleteCmd(logger logger.Logger) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "delete",
 		Short: "Delete a resource",
@@ -20,7 +20,7 @@ func newDeleteCmd(logger log.Logger) *cobra.Command {
 	return cmd
 }
 
-func newDeleteClusterCmd(logger log.Logger) *cobra.Command {
+func newDeleteClusterCmd(logger logger.Logger) *cobra.Command {
 	var name string
 
 	cmd := &cobra.Command{

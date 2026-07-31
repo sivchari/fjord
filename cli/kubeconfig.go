@@ -7,9 +7,9 @@ import (
 	"github.com/spf13/cobra"
 	"k8s.io/client-go/tools/clientcmd"
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
-	"sigs.k8s.io/kind/pkg/log"
 
 	"github.com/sivchari/fjord/internal/agent"
+	"github.com/sivchari/fjord/internal/logger"
 )
 
 const (
@@ -35,7 +35,7 @@ type updateKubeconfigOptions struct {
 	hostPort  int32
 }
 
-func newUpdateKubeconfigCmd(logger log.Logger) *cobra.Command {
+func newUpdateKubeconfigCmd(logger logger.Logger) *cobra.Command {
 	opts := &updateKubeconfigOptions{}
 
 	cmd := &cobra.Command{
@@ -56,7 +56,7 @@ func newUpdateKubeconfigCmd(logger log.Logger) *cobra.Command {
 	return cmd
 }
 
-func runUpdateKubeconfig(cmd *cobra.Command, logger log.Logger, opts *updateKubeconfigOptions) error {
+func runUpdateKubeconfig(cmd *cobra.Command, logger logger.Logger, opts *updateKubeconfigOptions) error {
 	client, err := opts.client()
 	if err != nil {
 		return err

@@ -5,7 +5,8 @@ import (
 	"time"
 
 	kindcluster "sigs.k8s.io/kind/pkg/cluster"
-	"sigs.k8s.io/kind/pkg/log"
+
+	"github.com/sivchari/fjord/internal/logger"
 )
 
 // Provider is the subset of kind cluster operations fjord uses.
@@ -45,10 +46,10 @@ type provider struct {
 
 // NewProvider returns a Provider backed by kind's docker node provider,
 // logging through logger.
-func NewProvider(logger log.Logger) Provider {
+func NewProvider(logger logger.Logger) Provider {
 	return &provider{
 		inner: kindcluster.NewProvider(
-			kindcluster.ProviderWithLogger(logger),
+			kindcluster.ProviderWithLogger(logAdapter{inner: logger}),
 			kindcluster.ProviderWithDocker(),
 		),
 	}

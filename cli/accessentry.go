@@ -9,9 +9,9 @@ import (
 	"net/url"
 
 	"github.com/spf13/cobra"
-	"sigs.k8s.io/kind/pkg/log"
 
 	"github.com/sivchari/fjord/internal/agent"
+	"github.com/sivchari/fjord/internal/logger"
 )
 
 // accessPolicyARNs maps the short policy names `fjord grant access-entry
@@ -64,7 +64,7 @@ type accessEntryOptions struct {
 	hostPort  int32
 }
 
-func newGrantCmd(logger log.Logger) *cobra.Command {
+func newGrantCmd(logger logger.Logger) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "grant",
 		Short: "Grant a resource",
@@ -74,7 +74,7 @@ func newGrantCmd(logger log.Logger) *cobra.Command {
 	return cmd
 }
 
-func newGrantAccessEntryCmd(_ log.Logger) *cobra.Command {
+func newGrantAccessEntryCmd(_ logger.Logger) *cobra.Command {
 	opts := &accessEntryOptions{}
 
 	cmd := &cobra.Command{

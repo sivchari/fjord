@@ -7,14 +7,14 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"testing"
 
-	"sigs.k8s.io/kind/pkg/log"
-
 	"github.com/sivchari/fjord/internal/eksd"
+	"github.com/sivchari/fjord/internal/logger"
 )
 
 // fakeBuildCall records a single invocation of a buildNodeImageFunc.
@@ -107,7 +107,7 @@ func TestBuild_Success(t *testing.T) {
 
 	var calls []fakeBuildCall
 
-	fakeBuild := func(tarballPath, imageTag, arch string, _ log.Logger) error {
+	fakeBuild := func(tarballPath, imageTag, arch string, _ logger.Logger) error {
 		calls = append(calls, fakeBuildCall{tarballPath: tarballPath, imageTag: imageTag, arch: arch})
 
 		if _, err := os.Stat(tarballPath); err != nil {
@@ -117,7 +117,7 @@ func TestBuild_Success(t *testing.T) {
 		return nil
 	}
 
-	imageTag, err := build(context.Background(), release, "amd64", log.NoopLogger{}, server.Client(), t.TempDir(), fakeBuild)
+	imageTag, err := build(context.Background(), release, "amd64", logger.NewStderr(io.Discard, 0), server.Client(), t.TempDir(), fakeBuild)
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
@@ -151,13 +151,13 @@ func TestBuild_UnsupportedArch(t *testing.T) {
 		ServerTarball: map[string]eksd.Asset{"amd64": {URI: "http://example.invalid", SHA256: "deadbeef"}},
 	}
 
-	fakeBuild := func(string, string, string, log.Logger) error {
+	fakeBuild := func(string, string, string, logger.Logger) error {
 		t.Fatal("buildNodeImage should not be called when arch has no server tarball")
 
 		return nil
 	}
 
-	if _, err := build(context.Background(), release, "arm64", log.NoopLogger{}, http.DefaultClient, t.TempDir(), fakeBuild); err == nil {
+	if _, err := build(context.Background(), release, "arm64", logger.NewStderr(io.Discard, 0), http.DefaultClient, t.TempDir(), fakeBuild); err == nil {
 		t.Fatal("build: want error for unsupported arch, got nil")
 	}
 }
@@ -182,11 +182,11 @@ func TestBuild_PropagatesBuildNodeImageError(t *testing.T) {
 		},
 	}
 
-	fakeBuild := func(string, string, string, log.Logger) error {
+	fakeBuild := func(string, string, string, logger.Logger) error {
 		return os.ErrPermission
 	}
 
-	if _, err := build(context.Background(), release, "amd64", log.NoopLogger{}, server.Client(), t.TempDir(), fakeBuild); err == nil {
+	if _, err := build(context.Background(), release, "amd64", logger.NewStderr(io.Discard, 0), server.Client(), t.TempDir(), fakeBuild); err == nil {
 		t.Fatal("build: want error, got nil")
 	}
 }

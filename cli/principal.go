@@ -7,9 +7,9 @@ import (
 	"github.com/spf13/cobra"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
-	"sigs.k8s.io/kind/pkg/log"
 
 	"github.com/sivchari/fjord/internal/agent"
+	"github.com/sivchari/fjord/internal/logger"
 )
 
 // principalRegistryOptions carries the cluster/context flags shared by
@@ -54,7 +54,7 @@ func (o *principalRegistryOptions) client() (kubernetes.Interface, error) {
 	return client, nil
 }
 
-func newCreatePrincipalCmd(logger log.Logger) *cobra.Command {
+func newCreatePrincipalCmd(logger logger.Logger) *cobra.Command {
 	opts := &principalRegistryOptions{}
 
 	cmd := &cobra.Command{
@@ -71,7 +71,7 @@ func newCreatePrincipalCmd(logger log.Logger) *cobra.Command {
 	return cmd
 }
 
-func runCreatePrincipal(cmd *cobra.Command, logger log.Logger, opts *principalRegistryOptions, name string) error {
+func runCreatePrincipal(cmd *cobra.Command, logger logger.Logger, opts *principalRegistryOptions, name string) error {
 	client, err := opts.client()
 	if err != nil {
 		return err
@@ -101,7 +101,7 @@ func runCreatePrincipal(cmd *cobra.Command, logger log.Logger, opts *principalRe
 	return nil
 }
 
-func newListCmd(logger log.Logger) *cobra.Command {
+func newListCmd(logger logger.Logger) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List resources",
@@ -111,7 +111,7 @@ func newListCmd(logger log.Logger) *cobra.Command {
 	return cmd
 }
 
-func newListPrincipalCmd(_ log.Logger) *cobra.Command {
+func newListPrincipalCmd(_ logger.Logger) *cobra.Command {
 	opts := &principalRegistryOptions{}
 
 	cmd := &cobra.Command{
@@ -154,7 +154,7 @@ func runListPrincipal(cmd *cobra.Command, opts *principalRegistryOptions) error 
 	return nil
 }
 
-func newDeletePrincipalCmd(logger log.Logger) *cobra.Command {
+func newDeletePrincipalCmd(logger logger.Logger) *cobra.Command {
 	opts := &principalRegistryOptions{}
 
 	cmd := &cobra.Command{
@@ -171,7 +171,7 @@ func newDeletePrincipalCmd(logger log.Logger) *cobra.Command {
 	return cmd
 }
 
-func runDeletePrincipal(cmd *cobra.Command, logger log.Logger, opts *principalRegistryOptions, name string) error {
+func runDeletePrincipal(cmd *cobra.Command, logger logger.Logger, opts *principalRegistryOptions, name string) error {
 	client, err := opts.client()
 	if err != nil {
 		return err

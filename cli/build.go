@@ -8,10 +8,10 @@ import (
 	"runtime"
 
 	"github.com/spf13/cobra"
-	"sigs.k8s.io/kind/pkg/log"
 
 	fjord "github.com/sivchari/fjord"
 	"github.com/sivchari/fjord/internal/eksd"
+	"github.com/sivchari/fjord/internal/logger"
 	"github.com/sivchari/fjord/internal/nodeimage"
 )
 
@@ -19,7 +19,7 @@ import (
 // fjord-agent image under.
 const agentImageRepository = "ghcr.io/sivchari/fjord/agent"
 
-func newBuildCmd(logger log.Logger) *cobra.Command {
+func newBuildCmd(logger logger.Logger) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "build",
 		Short: "Build an artifact",
@@ -30,7 +30,7 @@ func newBuildCmd(logger log.Logger) *cobra.Command {
 	return cmd
 }
 
-func newBuildNodeImageCmd(logger log.Logger) *cobra.Command {
+func newBuildNodeImageCmd(logger logger.Logger) *cobra.Command {
 	var (
 		eksVersion   string
 		arch         string
@@ -89,7 +89,7 @@ func defaultAgentImage() string {
 	return fmt.Sprintf("%s:%s", agentImageRepository, fjord.Version)
 }
 
-func newBuildAgentImageCmd(logger log.Logger) *cobra.Command {
+func newBuildAgentImageCmd(logger logger.Logger) *cobra.Command {
 	var (
 		arch  string
 		local bool

@@ -15,13 +15,13 @@ import (
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
-	"sigs.k8s.io/kind/pkg/log"
 
 	"github.com/sivchari/fjord/internal/agent"
 	"github.com/sivchari/fjord/internal/authn"
 	"github.com/sivchari/fjord/internal/cluster"
 	"github.com/sivchari/fjord/internal/eksd"
 	"github.com/sivchari/fjord/internal/kind"
+	"github.com/sivchari/fjord/internal/logger"
 	"github.com/sivchari/fjord/internal/nodeimage"
 	"github.com/sivchari/fjord/internal/pki"
 )
@@ -33,7 +33,7 @@ const (
 	defaultAgentHostPort = 48080
 )
 
-func newCreateCmd(logger log.Logger) *cobra.Command {
+func newCreateCmd(logger logger.Logger) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "create",
 		Short: "Create a resource",
@@ -60,7 +60,7 @@ type createClusterOptions struct {
 	withLoadBalancer bool
 }
 
-func newCreateClusterCmd(logger log.Logger) *cobra.Command {
+func newCreateClusterCmd(logger logger.Logger) *cobra.Command {
 	opts := &createClusterOptions{}
 
 	cmd := &cobra.Command{
@@ -91,7 +91,7 @@ func newCreateClusterCmd(logger log.Logger) *cobra.Command {
 	return cmd
 }
 
-func runCreateCluster(ctx context.Context, logger log.Logger, opts *createClusterOptions) error {
+func runCreateCluster(ctx context.Context, logger logger.Logger, opts *createClusterOptions) error {
 	eksVersion := opts.eksVersion
 	if eksVersion == "" {
 		eksVersion = latestVersion(eksd.SupportedVersions())
@@ -158,7 +158,7 @@ func runCreateCluster(ctx context.Context, logger log.Logger, opts *createCluste
 // either apply unmodified. Unlike --with-loadbalancer or --enable-auth, all
 // of these always run: fjord emulates them unconditionally, matching what
 // every real EKS cluster already has.
-func applyEKSDefaultState(ctx context.Context, logger log.Logger, provider kind.Provider, client kubernetes.Interface, name string) error {
+func applyEKSDefaultState(ctx context.Context, logger logger.Logger, provider kind.Provider, client kubernetes.Interface, name string) error {
 	logger.V(0).Info("Applying EKS default state (gp2 StorageClass) ...")
 
 	if err := cluster.EnsureDefaultStorageClass(ctx, client); err != nil {
@@ -188,7 +188,7 @@ func applyEKSDefaultState(ctx context.Context, logger log.Logger, provider kind.
 // deployLoadBalancer deploys metallb so type: LoadBalancer Services get an
 // external IP, using an address range carved out of the cluster's kind docker
 // network subnet.
-func deployLoadBalancer(ctx context.Context, logger log.Logger, provider kind.Provider, name string) error {
+func deployLoadBalancer(ctx context.Context, logger logger.Logger, provider kind.Provider, name string) error {
 	subnet, err := dockerNetworkSubnet(ctx)
 	if err != nil {
 		return err
@@ -298,7 +298,7 @@ func authnStagingDir(name string) (string, error) {
 // resolveNodeImage returns the node image tag to use for release: the
 // prebuilt floating tag, or a freshly built local image when
 // opts.buildLocal is set.
-func resolveNodeImage(ctx context.Context, logger log.Logger, opts *createClusterOptions, release *eksd.Release) (string, error) {
+func resolveNodeImage(ctx context.Context, logger logger.Logger, opts *createClusterOptions, release *eksd.Release) (string, error) {
 	if !opts.buildLocal {
 		return nodeimage.FloatingTag(release), nil
 	}
@@ -388,7 +388,7 @@ func dockerNetworkSubnet(ctx context.Context) (string, error) {
 // stageAuthenticator); it is reused here for IRSA/pod-identity-webhook's
 // serving certificates. eksVersion is registered in the EKS API facade's
 // ClusterInfo store so DescribeCluster/ListClusters can report it.
-func deployAgent(ctx context.Context, logger log.Logger, provider kind.Provider, client kubernetes.Interface, opts *createClusterOptions, ca *pki.CA, eksVersion string) error {
+func deployAgent(ctx context.Context, logger logger.Logger, provider kind.Provider, client kubernetes.Interface, opts *createClusterOptions, ca *pki.CA, eksVersion string) error {
 	image := opts.agentImage
 	if image == "" {
 		image = defaultAgentImage()
@@ -470,7 +470,7 @@ func resolveAWSEndpointURL(opts *createClusterOptions) string {
 
 // deployAuthenticator sets up fjord's authentication token webhook: its RBAC,
 // the DaemonSet that serves it, and the cluster-info the EKS API facade needs.
-func deployAuthenticator(ctx context.Context, logger log.Logger, provider kind.Provider, client kubernetes.Interface, image, name, eksVersion string) error {
+func deployAuthenticator(ctx context.Context, logger logger.Logger, provider kind.Provider, client kubernetes.Interface, image, name, eksVersion string) error {
 	logger.V(0).Info("Deploying the authentication token webhook (fjord-authenticator) ...")
 
 	if err := cluster.EnsureAuthenticatorRBAC(ctx, client); err != nil {
