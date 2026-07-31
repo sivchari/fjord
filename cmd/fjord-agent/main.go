@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
@@ -112,8 +113,10 @@ type apiServeOptions struct {
 }
 
 // serveAPI builds an in-cluster Kubernetes client, wires it to the fake STS
-// API server and (unless opts.injectorPort is 0) the IRSA injector webhook,
-// and serves both until the process receives a termination signal.
+// API server, (unless opts.injectorPort is 0) the IRSA injector webhook, the
+// ClusterNetworkPolicy controller (agent.CNPController), and the
+// TargetGroupBinding controller (agent.TargetGroupBindingController), and
+// serves until the process receives a termination signal.
 func serveAPI(cmd *cobra.Command, opts *apiServeOptions) error {
 	config, err := rest.InClusterConfig()
 	if err != nil {
@@ -124,6 +127,14 @@ func serveAPI(cmd *cobra.Command, opts *apiServeOptions) error {
 	if err != nil {
 		return fmt.Errorf("create kubernetes client: %w", err)
 	}
+
+	dynamicClient, err := dynamic.NewForConfig(config)
+	if err != nil {
+		return fmt.Errorf("create dynamic kubernetes client: %w", err)
+	}
+
+	defer startCNPController(cmd, clientset, dynamicClient)()
+	defer startTargetGroupBindingController(cmd.Context(), clientset, dynamicClient)()
 
 	podIdentityStore := agent.NewConfigMapPodIdentityStore(clientset)
 	accessEntryStore := agent.NewConfigMapAccessEntryStore(clientset)
@@ -159,6 +170,27 @@ func serveAPI(cmd *cobra.Command, opts *apiServeOptions) error {
 	}
 
 	return runUntilSignal(cmd, servers...)
+}
+
+// startCNPController starts agent.CNPController (reconciling
+// ClusterNetworkPolicy custom resources into standard NetworkPolicy
+// objects) in its own goroutine and returns a function that stops it. The
+// returned function's context has its own termination-signal listener
+// (independent of runUntilSignal's), so the goroutine stops once the
+// process is signaled to shut down rather than leaking past serveAPI's
+// return; callers should defer it.
+func startCNPController(cmd *cobra.Command, clientset kubernetes.Interface, dynamicClient dynamic.Interface) (stop func()) {
+	ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+	logf := func(format string, args ...any) { cmd.PrintErrln(fmt.Sprintf(format, args...)) }
+	controller := agent.NewCNPController(clientset, dynamicClient, logf)
+
+	go func() {
+		if err := controller.Run(ctx); err != nil {
+			logf("cluster network policy controller: %v", err)
+		}
+	}()
+
+	return stop
 }
 
 // managedServer pairs an *http.Server with the TLS certificate/key files to

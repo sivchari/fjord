@@ -1,0 +1,141 @@
+# CustomResourceDefinition for networking.k8s.aws/v1alpha1
+# ClusterNetworkPolicy, the CRD Amazon VPC CNI installs on real EKS clusters
+# to let admins enforce cluster-wide (Admin/Baseline tier) L3/L4 network
+# policy. fjord registers this CRD so `kubectl apply` of a real cluster's
+# ClusterNetworkPolicy manifests succeeds unmodified; internal/agent's
+# CNPController then reconciles the subset of its spec
+# TranslateClusterNetworkPolicy understands into standard NetworkPolicy
+# objects, since fjord's CNI (kindnet) does not itself understand this CRD.
+#
+# This schema only types the fields fjord's translation reads (tier,
+# priority, subject, ingress/egress name/action/from/ports); every object in
+# the schema also preserves unknown fields, so a real ClusterNetworkPolicy
+# manifest using fields fjord does not translate (egress, pod-level
+# subjects, named ports, ...) is still accepted rather than rejected or
+# silently pruned.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: clusternetworkpolicies.networking.k8s.aws
+spec:
+  group: networking.k8s.aws
+  scope: Cluster
+  names:
+    plural: clusternetworkpolicies
+    singular: clusternetworkpolicy
+    kind: ClusterNetworkPolicy
+    listKind: ClusterNetworkPolicyList
+    shortNames:
+      - cnp
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      schema:
+        openAPIV3Schema:
+          type: object
+          x-kubernetes-preserve-unknown-fields: true
+          properties:
+            spec:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+              required:
+                - subject
+              properties:
+                tier:
+                  type: string
+                priority:
+                  type: integer
+                subject:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                  properties:
+                    namespaces:
+                      type: object
+                      x-kubernetes-preserve-unknown-fields: true
+                    pods:
+                      type: object
+                      x-kubernetes-preserve-unknown-fields: true
+                ingress:
+                  type: array
+                  items:
+                    type: object
+                    x-kubernetes-preserve-unknown-fields: true
+                    properties:
+                      name:
+                        type: string
+                      action:
+                        type: string
+                        enum: ["Allow", "Deny"]
+                      from:
+                        type: array
+                        items:
+                          type: object
+                          x-kubernetes-preserve-unknown-fields: true
+                          properties:
+                            namespaces:
+                              type: object
+                              x-kubernetes-preserve-unknown-fields: true
+                      ports:
+                        type: array
+                        items:
+                          type: object
+                          x-kubernetes-preserve-unknown-fields: true
+                          properties:
+                            portNumber:
+                              type: object
+                              x-kubernetes-preserve-unknown-fields: true
+                              properties:
+                                protocol:
+                                  type: string
+                                port:
+                                  type: integer
+                egress:
+                  type: array
+                  items:
+                    type: object
+                    x-kubernetes-preserve-unknown-fields: true
+                    properties:
+                      name:
+                        type: string
+                      action:
+                        type: string
+                        enum: ["Allow", "Deny"]
+                      to:
+                        type: array
+                        items:
+                          type: object
+                          x-kubernetes-preserve-unknown-fields: true
+                          properties:
+                            namespaces:
+                              type: object
+                              x-kubernetes-preserve-unknown-fields: true
+                      ports:
+                        type: array
+                        items:
+                          type: object
+                          x-kubernetes-preserve-unknown-fields: true
+                          properties:
+                            portNumber:
+                              type: object
+                              x-kubernetes-preserve-unknown-fields: true
+                              properties:
+                                protocol:
+                                  type: string
+                                port:
+                                  type: integer
+            status:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+      additionalPrinterColumns:
+        - name: Tier
+          type: string
+          jsonPath: .spec.tier
+        - name: Priority
+          type: integer
+          jsonPath: .spec.priority
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp

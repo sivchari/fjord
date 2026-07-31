@@ -130,10 +130,8 @@ func runCreateCluster(ctx context.Context, logger log.Logger, opts *createCluste
 		return err
 	}
 
-	logger.V(0).Info("Applying EKS default state (gp2 StorageClass) ...")
-
-	if err := cluster.EnsureDefaultStorageClass(ctx, client); err != nil {
-		return fmt.Errorf("ensure default storage class: %w", err)
+	if err := applyEKSDefaultState(ctx, logger, provider, client, opts.name); err != nil {
+		return err
 	}
 
 	if opts.enableAuth {
@@ -149,6 +147,40 @@ func runCreateCluster(ctx context.Context, logger log.Logger, opts *createCluste
 	}
 
 	logger.V(0).Infof("Cluster %q is ready. Set kubectl context to \"kind-%s\".", opts.name, opts.name)
+
+	return nil
+}
+
+// applyEKSDefaultState brings a freshly created cluster to the default state
+// a new Amazon EKS cluster starts in: the gp2/gp3 StorageClasses, and the
+// ClusterNetworkPolicy (networking.k8s.aws/v1alpha1) and TargetGroupBinding
+// (elbv2.k8s.aws/v1beta1) CRDs registered so a real cluster's manifests for
+// either apply unmodified. Unlike --with-loadbalancer or --enable-auth, all
+// of these always run: fjord emulates them unconditionally, matching what
+// every real EKS cluster already has.
+func applyEKSDefaultState(ctx context.Context, logger log.Logger, provider kind.Provider, client kubernetes.Interface, name string) error {
+	logger.V(0).Info("Applying EKS default state (gp2 StorageClass) ...")
+
+	if err := cluster.EnsureDefaultStorageClass(ctx, client); err != nil {
+		return fmt.Errorf("ensure default storage class: %w", err)
+	}
+
+	dynamicClient, err := clusterDynamicClient(provider, name)
+	if err != nil {
+		return err
+	}
+
+	logger.V(0).Info("Registering the ClusterNetworkPolicy CRD (networking.k8s.aws/v1alpha1) ...")
+
+	if err := cluster.EnsureClusterNetworkPolicyCRD(ctx, client, dynamicClient); err != nil {
+		return fmt.Errorf("ensure cluster network policy crd: %w", err)
+	}
+
+	logger.V(0).Info("Registering the TargetGroupBinding CRD (elbv2.k8s.aws/v1beta1) ...")
+
+	if err := cluster.EnsureTargetGroupBindingCRD(ctx, client, dynamicClient); err != nil {
+		return fmt.Errorf("ensure target group binding crd: %w", err)
+	}
 
 	return nil
 }

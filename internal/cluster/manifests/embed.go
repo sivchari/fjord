@@ -11,3 +11,10 @@ import _ "embed"
 //
 //go:embed metallb-native.yaml
 var MetalLBNative []byte
+
+// ClusterNetworkPolicyCRD is the CustomResourceDefinition for
+// networking.k8s.aws/v1alpha1 ClusterNetworkPolicy; see
+// clusternetworkpolicy-crd.yaml's header comment.
+//
+//go:embed clusternetworkpolicy-crd.yaml
+var ClusterNetworkPolicyCRD []byte

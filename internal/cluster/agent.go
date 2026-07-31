@@ -3,6 +3,7 @@ package cluster
 import (
 	"context"
 	"fmt"
+	"slices"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -109,48 +110,59 @@ func ensureServiceAccount(ctx context.Context, client kubernetes.Interface) erro
 // later phases, ConfigMaps in the same namespace), the ability to create
 // TokenReviews for the authenticator webhook, read access to
 // ServiceAccounts so its IRSA injector webhook can resolve the
-// eks.amazonaws.com/role-arn annotation, and the ability to materialize
+// eks.amazonaws.com/role-arn annotation, the ability to materialize
 // ClusterRoleBinding/RoleBinding objects for the EKS access-entries
 // facade's AssociateAccessPolicy endpoint (see internal/agent/facade.go's
-// materializeAccessPolicyRBAC). The same ClusterRole is also bound to
-// fjord-authenticator's ServiceAccount (see EnsureAuthenticatorRBAC), since
-// it needs identical read access to the principal registry and access
-// entries.
+// materializeAccessPolicyRBAC), read access to ClusterNetworkPolicy custom
+// resources plus full access to Namespaces/NetworkPolicies for
+// internal/agent's CNPController (which reconciles the former into the
+// latter), and read/watch access to elbv2.k8s.aws/v1beta1
+// TargetGroupBindings plus control of Services for
+// internal/agent.TargetGroupBindingController's mirror-Service emulation.
+// The same ClusterRole is also bound to fjord-authenticator's
+// ServiceAccount (see EnsureAuthenticatorRBAC), since it needs identical
+// read access to the principal registry and access entries.
 func ensureClusterRole(ctx context.Context, client kubernetes.Interface) error {
+	baseRules := []rbacv1.PolicyRule{
+		{
+			APIGroups: []string{""},
+			Resources: []string{"secrets", "configmaps"},
+			Verbs:     []string{"get", "list", "create", "update", "patch"},
+		},
+		{
+			APIGroups: []string{"authentication.k8s.io"},
+			Resources: []string{"tokenreviews"},
+			Verbs:     []string{"create"},
+		},
+		{
+			APIGroups: []string{""},
+			Resources: []string{"serviceaccounts"},
+			Verbs:     []string{"get"},
+		},
+		{
+			APIGroups: []string{"rbac.authorization.k8s.io"},
+			Resources: []string{"clusterrolebindings", "rolebindings"},
+			Verbs:     []string{"get", "create", "delete"},
+		},
+		{
+			// The bind verb lets fjord-agent create bindings to these
+			// built-in roles when materializing an access policy without
+			// holding their permissions itself, which RBAC's
+			// privilege-escalation prevention would otherwise forbid.
+			APIGroups:     []string{"rbac.authorization.k8s.io"},
+			Resources:     []string{"clusterroles"},
+			Verbs:         []string{"bind"},
+			ResourceNames: []string{"cluster-admin", "admin", "edit", "view"},
+		},
+	}
+
 	role := &rbacv1.ClusterRole{
 		ObjectMeta: metav1.ObjectMeta{Name: agentName},
-		Rules: []rbacv1.PolicyRule{
-			{
-				APIGroups: []string{""},
-				Resources: []string{"secrets", "configmaps"},
-				Verbs:     []string{"get", "list", "create", "update", "patch"},
-			},
-			{
-				APIGroups: []string{"authentication.k8s.io"},
-				Resources: []string{"tokenreviews"},
-				Verbs:     []string{"create"},
-			},
-			{
-				APIGroups: []string{""},
-				Resources: []string{"serviceaccounts"},
-				Verbs:     []string{"get"},
-			},
-			{
-				APIGroups: []string{"rbac.authorization.k8s.io"},
-				Resources: []string{"clusterrolebindings", "rolebindings"},
-				Verbs:     []string{"get", "create", "delete"},
-			},
-			{
-				// The bind verb lets fjord-agent create bindings to these
-				// built-in roles when materializing an access policy without
-				// holding their permissions itself, which RBAC's
-				// privilege-escalation prevention would otherwise forbid.
-				APIGroups:     []string{"rbac.authorization.k8s.io"},
-				Resources:     []string{"clusterroles"},
-				Verbs:         []string{"bind"},
-				ResourceNames: []string{"cluster-admin", "admin", "edit", "view"},
-			},
-		},
+		Rules: slices.Concat(
+			baseRules,
+			clusterNetworkPolicyControllerRules(),
+			targetGroupBindingControllerRules(),
+		),
 	}
 
 	_, err := client.RbacV1().ClusterRoles().Create(ctx, role, metav1.CreateOptions{})
@@ -163,6 +175,52 @@ func ensureClusterRole(ctx context.Context, client kubernetes.Interface) error {
 	}
 
 	return nil
+}
+
+// clusterNetworkPolicyControllerRules returns the PolicyRules
+// internal/agent's CNPController needs: read access to
+// networking.k8s.aws/v1alpha1 ClusterNetworkPolicy custom resources, read
+// access to Namespaces to resolve each policy's subject selector, and full
+// control of standard NetworkPolicy objects, the ones it reconciles
+// ClusterNetworkPolicies into.
+func clusterNetworkPolicyControllerRules() []rbacv1.PolicyRule {
+	return []rbacv1.PolicyRule{
+		{
+			APIGroups: []string{"networking.k8s.aws"},
+			Resources: []string{"clusternetworkpolicies"},
+			Verbs:     []string{"get", "list", "watch"},
+		},
+		{
+			APIGroups: []string{""},
+			Resources: []string{"namespaces"},
+			Verbs:     []string{"get", "list", "watch"},
+		},
+		{
+			APIGroups: []string{"networking.k8s.io"},
+			Resources: []string{"networkpolicies"},
+			Verbs:     []string{"get", "list", "watch", "create", "update", "patch", "delete"},
+		},
+	}
+}
+
+// targetGroupBindingControllerRules returns the PolicyRules
+// internal/agent.TargetGroupBindingController needs: read access to
+// elbv2.k8s.aws/v1beta1 TargetGroupBinding custom resources, and control of
+// Services to create/update/delete the mirror LoadBalancer Service it
+// emulates each binding with.
+func targetGroupBindingControllerRules() []rbacv1.PolicyRule {
+	return []rbacv1.PolicyRule{
+		{
+			APIGroups: []string{""},
+			Resources: []string{"services"},
+			Verbs:     []string{"get", "list", "watch", "create", "update", "delete"},
+		},
+		{
+			APIGroups: []string{"elbv2.k8s.aws"},
+			Resources: []string{"targetgroupbindings"},
+			Verbs:     []string{"get", "list", "watch"},
+		},
+	}
 }
 
 // ensureClusterRoleBinding creates fjord-agent's ClusterRoleBinding if it
