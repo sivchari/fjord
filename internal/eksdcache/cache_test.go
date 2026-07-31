@@ -1,4 +1,4 @@
-package nodeimage_test
+package eksdcache_test
 
 import (
 	"bytes"
@@ -12,7 +12,7 @@ import (
 	"testing"
 
 	"github.com/sivchari/fjord/internal/eksd"
-	"github.com/sivchari/fjord/internal/nodeimage"
+	"github.com/sivchari/fjord/internal/eksdcache"
 )
 
 func sha256Hex(t *testing.T, data []byte) string {
@@ -37,7 +37,7 @@ func TestDownloadServerTarball_DownloadsAndVerifies(t *testing.T) {
 	cacheDir := t.TempDir()
 	asset := eksd.Asset{URI: server.URL, SHA256: sum}
 
-	path, err := nodeimage.DownloadServerTarball(context.Background(), server.Client(), asset, cacheDir)
+	path, err := eksdcache.DownloadServerTarball(context.Background(), server.Client(), asset, cacheDir)
 	if err != nil {
 		t.Fatalf("DownloadServerTarball: %v", err)
 	}
@@ -79,7 +79,7 @@ func TestDownloadServerTarball_SkipsWhenCacheIsFresh(t *testing.T) {
 
 	asset := eksd.Asset{URI: server.URL, SHA256: sum}
 
-	path, err := nodeimage.DownloadServerTarball(context.Background(), server.Client(), asset, cacheDir)
+	path, err := eksdcache.DownloadServerTarball(context.Background(), server.Client(), asset, cacheDir)
 	if err != nil {
 		t.Fatalf("DownloadServerTarball: %v", err)
 	}
@@ -115,7 +115,7 @@ func TestDownloadServerTarball_RedownloadsWhenCacheIsStale(t *testing.T) {
 
 	asset := eksd.Asset{URI: server.URL, SHA256: sum}
 
-	path, err := nodeimage.DownloadServerTarball(context.Background(), server.Client(), asset, cacheDir)
+	path, err := eksdcache.DownloadServerTarball(context.Background(), server.Client(), asset, cacheDir)
 	if err != nil {
 		t.Fatalf("DownloadServerTarball: %v", err)
 	}
@@ -146,7 +146,7 @@ func TestDownloadServerTarball_ChecksumMismatchReturnsError(t *testing.T) {
 	wantSum := sha256Hex(t, []byte("something else entirely"))
 	asset := eksd.Asset{URI: server.URL, SHA256: wantSum}
 
-	_, err := nodeimage.DownloadServerTarball(context.Background(), server.Client(), asset, cacheDir)
+	_, err := eksdcache.DownloadServerTarball(context.Background(), server.Client(), asset, cacheDir)
 	if err == nil {
 		t.Fatal("DownloadServerTarball: want error on checksum mismatch, got nil")
 	}
@@ -167,7 +167,7 @@ func TestDownloadServerTarball_HTTPErrorStatus(t *testing.T) {
 	cacheDir := t.TempDir()
 	asset := eksd.Asset{URI: server.URL, SHA256: sha256Hex(t, []byte("anything"))}
 
-	if _, err := nodeimage.DownloadServerTarball(context.Background(), server.Client(), asset, cacheDir); err == nil {
+	if _, err := eksdcache.DownloadServerTarball(context.Background(), server.Client(), asset, cacheDir); err == nil {
 		t.Fatal("DownloadServerTarball: want error on HTTP 404, got nil")
 	}
 }
@@ -175,7 +175,7 @@ func TestDownloadServerTarball_HTTPErrorStatus(t *testing.T) {
 func TestDefaultCacheDir(t *testing.T) {
 	t.Parallel()
 
-	dir, err := nodeimage.DefaultCacheDir()
+	dir, err := eksdcache.DefaultCacheDir()
 	if err != nil {
 		t.Fatalf("DefaultCacheDir: %v", err)
 	}

@@ -1,4 +1,4 @@
-package nodeimage
+package eksdcache
 
 import (
 	"context"

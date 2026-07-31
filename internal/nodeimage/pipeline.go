@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/sivchari/fjord/internal/eksd"
+	"github.com/sivchari/fjord/internal/eksdcache"
 	"github.com/sivchari/fjord/internal/kind"
 	"github.com/sivchari/fjord/internal/logger"
 )
@@ -20,9 +21,9 @@ type buildNodeImageFunc func(tarballPath, imageTag, arch string, logger logger.L
 // from the result via internal/kind.BuildNodeImage. It returns the image
 // tag the node image was built and tagged as (see Tag).
 func Build(ctx context.Context, release *eksd.Release, arch string, logger logger.Logger) (string, error) {
-	cacheDir, err := DefaultCacheDir()
+	cacheDir, err := eksdcache.DefaultCacheDir()
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("resolving cache dir: %w", err)
 	}
 
 	return build(ctx, release, arch, logger, http.DefaultClient, cacheDir, kind.BuildNodeImage)
@@ -45,9 +46,9 @@ func build(
 		return "", fmt.Errorf("eks version %q has no server tarball for arch %q", release.EKSVersion, arch)
 	}
 
-	cachedPath, err := DownloadServerTarball(ctx, client, asset, cacheDir)
+	cachedPath, err := eksdcache.DownloadServerTarball(ctx, client, asset, cacheDir)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("downloading server tarball: %w", err)
 	}
 
 	rewrittenPath, cleanup, err := RewriteServerTarball(cachedPath)
