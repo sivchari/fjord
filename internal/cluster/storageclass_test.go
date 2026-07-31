@@ -11,6 +11,18 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 )
 
+// defaultAnnotatedClass builds a local-path-provisioner StorageClass named
+// name carrying the default-class annotation.
+func defaultAnnotatedClass(name string) *storagev1.StorageClass {
+	return &storagev1.StorageClass{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        name,
+			Annotations: map[string]string{defaultClassAnnotation: defaultClassValue},
+		},
+		Provisioner: localPathProvisioner,
+	}
+}
+
 func TestEnsureDefaultStorageClass(t *testing.T) {
 	t.Parallel()
 
@@ -19,15 +31,21 @@ func TestEnsureDefaultStorageClass(t *testing.T) {
 		existing []*storagev1.StorageClass
 	}{
 		{
-			name: "kind standard exists as default",
+			name:     "standard exists as default",
+			existing: []*storagev1.StorageClass{defaultAnnotatedClass("standard")},
+		},
+		{
+			// rask's bundled local-path-storage.yaml marks local-path --
+			// not standard -- as the default; demotion must go by the
+			// annotation, not the class name.
+			name:     "rask's local-path exists as default",
+			existing: []*storagev1.StorageClass{defaultAnnotatedClass("local-path")},
+		},
+		{
+			name: "both local-path and standard are default",
 			existing: []*storagev1.StorageClass{
-				{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:        "standard",
-						Annotations: map[string]string{defaultClassAnnotation: defaultClassValue},
-					},
-					Provisioner: localPathProvisioner,
-				},
+				defaultAnnotatedClass("local-path"),
+				defaultAnnotatedClass("standard"),
 			},
 		},
 		{

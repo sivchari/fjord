@@ -18,12 +18,10 @@ const (
 	// defaultClassValue is its truthy value.
 	defaultClassAnnotation = "storageclass.kubernetes.io/is-default-class"
 	defaultClassValue      = "true"
-	// localPathProvisioner is the provisioner kind's bundled local-path
+	// localPathProvisioner is the provisioner rask's bundled local-path
 	// storage uses; fjord's gp2 class reuses it as the local stand-in for
 	// EBS-backed gp2.
 	localPathProvisioner = "rancher.io/local-path"
-	// kindDefaultStorageClass is the StorageClass kind installs by default.
-	kindDefaultStorageClass = "standard"
 )
 
 // NewClient builds a Kubernetes client from raw kubeconfig content.
@@ -42,14 +40,17 @@ func NewClient(kubeconfig string) (kubernetes.Interface, error) {
 }
 
 // EnsureDefaultStorageClass creates the EKS-style gp2 and gp3 StorageClasses
-// (both backed by kind's local-path provisioner), with gp2 as the cluster
-// default, and demotes kind's standard class so exactly one default remains,
-// matching a new EKS cluster. gp3 is not a default on EKS but is widely used
-// (real EKS workloads commonly set storageClassName: gp3), so providing it
-// lets those PVCs bind unchanged. kind installs its default StorageClass
+// (both backed by rask's bundled local-path provisioner), with gp2 as the
+// cluster default, and demotes every other default-annotated class so
+// exactly one default remains, matching a new EKS cluster. rask's bundle
+// marks its own local-path class as the default (and clusters may also
+// carry a standard alias), so demotion goes by the annotation, not by
+// name. gp3 is not a default on EKS but is widely used (real EKS
+// workloads commonly set storageClassName: gp3), so providing it lets
+// those PVCs bind unchanged. rask installs its default StorageClasses
 // before cluster creation returns, so no waiting is required here.
 func EnsureDefaultStorageClass(ctx context.Context, client kubernetes.Interface) error {
-	if err := demoteStandardClass(ctx, client); err != nil {
+	if err := demoteDefaultClasses(ctx, client); err != nil {
 		return err
 	}
 
@@ -60,26 +61,26 @@ func EnsureDefaultStorageClass(ctx context.Context, client kubernetes.Interface)
 	return createStorageClass(ctx, client, "gp3", false)
 }
 
-// demoteStandardClass removes the default-class annotation from kind's
-// standard StorageClass. A missing class is not an error.
-func demoteStandardClass(ctx context.Context, client kubernetes.Interface) error {
-	standard, err := client.StorageV1().StorageClasses().Get(ctx, kindDefaultStorageClass, metav1.GetOptions{})
-	if apierrors.IsNotFound(err) {
-		return nil
-	}
-
+// demoteDefaultClasses removes the default-class annotation from every
+// StorageClass that carries it, except gp2 (which EnsureDefaultStorageClass
+// is about to make, or keep, the sole default).
+func demoteDefaultClasses(ctx context.Context, client kubernetes.Interface) error {
+	classes, err := client.StorageV1().StorageClasses().List(ctx, metav1.ListOptions{})
 	if err != nil {
-		return fmt.Errorf("get %q storage class: %w", kindDefaultStorageClass, err)
+		return fmt.Errorf("list storage classes: %w", err)
 	}
 
-	if standard.Annotations[defaultClassAnnotation] != defaultClassValue {
-		return nil
-	}
+	for i := range classes.Items {
+		sc := &classes.Items[i]
+		if sc.Name == "gp2" || sc.Annotations[defaultClassAnnotation] != defaultClassValue {
+			continue
+		}
 
-	standard.Annotations[defaultClassAnnotation] = "false"
+		sc.Annotations[defaultClassAnnotation] = "false"
 
-	if _, err := client.StorageV1().StorageClasses().Update(ctx, standard, metav1.UpdateOptions{}); err != nil {
-		return fmt.Errorf("demote %q storage class: %w", kindDefaultStorageClass, err)
+		if _, err := client.StorageV1().StorageClasses().Update(ctx, sc, metav1.UpdateOptions{}); err != nil {
+			return fmt.Errorf("demote %q storage class: %w", sc.Name, err)
+		}
 	}
 
 	return nil
