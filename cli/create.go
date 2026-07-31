@@ -24,6 +24,7 @@ import (
 	"github.com/sivchari/fjord/internal/logger"
 	"github.com/sivchari/fjord/internal/nodeimage"
 	"github.com/sivchari/fjord/internal/pki"
+	clusterprovider "github.com/sivchari/fjord/internal/provider"
 )
 
 const (
@@ -116,7 +117,7 @@ func runCreateCluster(ctx context.Context, logger logger.Logger, opts *createClu
 
 	provider := kind.NewProvider(logger)
 
-	err = provider.CreateCluster(opts.name, kind.CreateOptions{
+	err = provider.CreateCluster(opts.name, clusterprovider.CreateOptions{
 		NodeImage:    image,
 		Config:       config,
 		WaitForReady: opts.wait,
@@ -158,7 +159,7 @@ func runCreateCluster(ctx context.Context, logger logger.Logger, opts *createClu
 // either apply unmodified. Unlike --with-loadbalancer or --enable-auth, all
 // of these always run: fjord emulates them unconditionally, matching what
 // every real EKS cluster already has.
-func applyEKSDefaultState(ctx context.Context, logger logger.Logger, provider kind.Provider, client kubernetes.Interface, name string) error {
+func applyEKSDefaultState(ctx context.Context, logger logger.Logger, provider clusterprovider.Provider, client kubernetes.Interface, name string) error {
 	logger.V(0).Info("Applying EKS default state (gp2 StorageClass) ...")
 
 	if err := cluster.EnsureDefaultStorageClass(ctx, client); err != nil {
@@ -188,7 +189,7 @@ func applyEKSDefaultState(ctx context.Context, logger logger.Logger, provider ki
 // deployLoadBalancer deploys metallb so type: LoadBalancer Services get an
 // external IP, using an address range carved out of the cluster's kind docker
 // network subnet.
-func deployLoadBalancer(ctx context.Context, logger logger.Logger, provider kind.Provider, name string) error {
+func deployLoadBalancer(ctx context.Context, logger logger.Logger, provider clusterprovider.Provider, name string) error {
 	subnet, err := dockerNetworkSubnet(ctx)
 	if err != nil {
 		return err
@@ -218,20 +219,20 @@ func deployLoadBalancer(ctx context.Context, logger logger.Logger, provider kind
 	return nil
 }
 
-// buildKindConfig builds the kind.Config for opts and release. When auth is
-// enabled it also generates the fjord CA and stages the authenticator's
-// static pod manifest, webhook kubeconfig, and TLS certificate (see
-// stageAuthenticator), wiring the result into the returned Config's
-// ExtraMounts and AuthWebhook: both must exist before the cluster is
-// created, since kind delivers them into the control-plane node as part of
-// cluster creation itself, before the API server ever starts. The returned
-// CA is nil when auth is disabled; otherwise it is reused later for
+// buildKindConfig builds the clusterprovider.Config for opts and release.
+// When auth is enabled it also generates the fjord CA and stages the
+// authenticator's static pod manifest, webhook kubeconfig, and TLS
+// certificate (see stageAuthenticator), wiring the result into the returned
+// Config's ExtraMounts and AuthWebhook: both must exist before the cluster
+// is created, since kind delivers them into the control-plane node as part
+// of cluster creation itself, before the API server ever starts. The
+// returned CA is nil when auth is disabled; otherwise it is reused later for
 // IRSA/pod-identity-webhook's serving certificates, so the webhook
 // kubeconfig's trust and every fjord-issued certificate share one root.
-func buildKindConfig(opts *createClusterOptions, release *eksd.Release) (*kind.Config, *pki.CA, error) {
+func buildKindConfig(opts *createClusterOptions, release *eksd.Release) (*clusterprovider.Config, *pki.CA, error) {
 	coreDNSRepo, coreDNSTag := coreDNSKubeadmRepository(release.CoreDNSImage)
 
-	config := &kind.Config{
+	config := &clusterprovider.Config{
 		Name:                   opts.name,
 		KubeVersion:            release.KubeVersion,
 		CoreDNSImageRepository: coreDNSRepo,
@@ -325,7 +326,7 @@ func agentHostPort(enableAuth bool, hostPort int32) int32 {
 
 // clusterClient builds a Kubernetes client for the cluster named name via
 // provider's kubeconfig.
-func clusterClient(provider kind.Provider, name string) (kubernetes.Interface, error) {
+func clusterClient(provider clusterprovider.Provider, name string) (kubernetes.Interface, error) {
 	kubeconfig, err := provider.KubeConfig(name)
 	if err != nil {
 		return nil, fmt.Errorf("get kubeconfig: %w", err)
@@ -341,7 +342,7 @@ func clusterClient(provider kind.Provider, name string) (kubernetes.Interface, e
 
 // clusterDynamicClient builds a dynamic client for the cluster named name,
 // used to apply metallb's native manifest and custom resources.
-func clusterDynamicClient(provider kind.Provider, name string) (dynamic.Interface, error) {
+func clusterDynamicClient(provider clusterprovider.Provider, name string) (dynamic.Interface, error) {
 	kubeconfig, err := provider.KubeConfig(name)
 	if err != nil {
 		return nil, fmt.Errorf("get kubeconfig: %w", err)
@@ -388,7 +389,7 @@ func dockerNetworkSubnet(ctx context.Context) (string, error) {
 // stageAuthenticator); it is reused here for IRSA/pod-identity-webhook's
 // serving certificates. eksVersion is registered in the EKS API facade's
 // ClusterInfo store so DescribeCluster/ListClusters can report it.
-func deployAgent(ctx context.Context, logger logger.Logger, provider kind.Provider, client kubernetes.Interface, opts *createClusterOptions, ca *pki.CA, eksVersion string) error {
+func deployAgent(ctx context.Context, logger logger.Logger, provider clusterprovider.Provider, client kubernetes.Interface, opts *createClusterOptions, ca *pki.CA, eksVersion string) error {
 	image := opts.agentImage
 	if image == "" {
 		image = defaultAgentImage()
@@ -470,7 +471,7 @@ func resolveAWSEndpointURL(opts *createClusterOptions) string {
 
 // deployAuthenticator sets up fjord's authentication token webhook: its RBAC,
 // the DaemonSet that serves it, and the cluster-info the EKS API facade needs.
-func deployAuthenticator(ctx context.Context, logger logger.Logger, provider kind.Provider, client kubernetes.Interface, image, name, eksVersion string) error {
+func deployAuthenticator(ctx context.Context, logger logger.Logger, provider clusterprovider.Provider, client kubernetes.Interface, image, name, eksVersion string) error {
 	logger.V(0).Info("Deploying the authentication token webhook (fjord-authenticator) ...")
 
 	if err := cluster.EnsureAuthenticatorRBAC(ctx, client); err != nil {
@@ -489,7 +490,7 @@ func deployAuthenticator(ctx context.Context, logger logger.Logger, provider kin
 // version in fjord-agent's ClusterInfo store, so the EKS API facade's
 // DescribeCluster and ListClusters endpoints (which `fjord update-kubeconfig`
 // and standard EKS tooling call) can serve them.
-func ensureClusterInfo(ctx context.Context, provider kind.Provider, client kubernetes.Interface, name, eksVersion string) error {
+func ensureClusterInfo(ctx context.Context, provider clusterprovider.Provider, client kubernetes.Interface, name, eksVersion string) error {
 	kubeconfig, err := provider.KubeConfig(name)
 	if err != nil {
 		return fmt.Errorf("get kubeconfig: %w", err)

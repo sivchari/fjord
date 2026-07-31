@@ -6,75 +6,28 @@ import (
 	"strings"
 
 	"sigs.k8s.io/kind/pkg/apis/config/v1alpha4"
+
+	clusterprovider "github.com/sivchari/fjord/internal/provider"
 )
 
 // agentNodePort is the NodePort fjord-agent's fake STS API is published on
 // inside the cluster (see internal/cluster.EnsureAgent's NodePort Service).
 const agentNodePort = 30080
 
-// Mount is a host directory mounted into the control-plane node container.
-type Mount struct {
-	HostPath      string
-	ContainerPath string
-}
-
-// AuthWebhook configures the API server to call fjord's authentication token
-// webhook. The webhook config file and its directory are delivered to the
-// node via Config.ExtraMounts.
-type AuthWebhook struct {
-	// ConfigFilePath is the path, inside the API server container, to the
-	// authentication-token-webhook-config-file.
-	ConfigFilePath string
-	// VolumeName names the extra volume mounting the config file's directory
-	// into the API server static pod.
-	VolumeName string
-	// VolumeHostPath is that directory's path on the node, and
-	// VolumeMountPath where it mounts inside the API server container.
-	VolumeHostPath  string
-	VolumeMountPath string
-}
-
-// Config is the subset of kind cluster configuration fjord exposes.
-type Config struct {
-	// Name is the cluster name.
-	Name string
-	// KubeVersion is the Kubernetes version the node image runs (e.g.
-	// "v1.33.13"). It selects the kubeadm config API version for patches
-	// and must match the node image.
-	KubeVersion string
-	// CoreDNSImageRepository overrides the CoreDNS image repository via a
-	// kubeadm ClusterConfiguration patch. Leave empty to use kind's default.
-	CoreDNSImageRepository string
-	// CoreDNSImageTag overrides the CoreDNS image tag via a kubeadm
-	// ClusterConfiguration patch. Leave empty to use kind's default.
-	CoreDNSImageTag string
-	// HostPort, if nonzero, publishes fjord-agent's NodePort Service
-	// (agentNodePort) on this host port, so callers outside the cluster can
-	// reach its fake STS API. Zero adds no port mapping.
-	HostPort int32
-	// ExtraMounts are host directories mounted into the control-plane node,
-	// used to deliver the authenticator's static pod manifest, webhook
-	// config, and TLS material before the API server starts.
-	ExtraMounts []Mount
-	// AuthWebhook, if non-nil, configures the API server to authenticate
-	// tokens via fjord's authentication webhook.
-	AuthWebhook *AuthWebhook
-}
-
 // ToV1Alpha4 builds the kind v1alpha4.Cluster equivalent of c. v0 only
 // supports a single control-plane node, so a node is defined only when a port
 // mapping or extra mount requires one; otherwise kind applies its own
 // single-node default.
-func (c *Config) ToV1Alpha4() *v1alpha4.Cluster {
+func ToV1Alpha4(c *clusterprovider.Config) *v1alpha4.Cluster {
 	cluster := &v1alpha4.Cluster{
 		Name: c.Name,
 	}
 
-	if patch := c.clusterConfigurationPatch(); patch != "" {
+	if patch := clusterConfigurationPatch(c); patch != "" {
 		cluster.KubeadmConfigPatches = append(cluster.KubeadmConfigPatches, patch)
 	}
 
-	if node := c.controlPlaneNode(); node != nil {
+	if node := controlPlaneNode(c); node != nil {
 		cluster.Nodes = []v1alpha4.Node{*node}
 	}
 
@@ -83,7 +36,7 @@ func (c *Config) ToV1Alpha4() *v1alpha4.Cluster {
 
 // controlPlaneNode returns the control-plane node definition when a port
 // mapping or extra mount requires one, or nil to let kind use its default.
-func (c *Config) controlPlaneNode() *v1alpha4.Node {
+func controlPlaneNode(c *clusterprovider.Config) *v1alpha4.Node {
 	if c.HostPort == 0 && len(c.ExtraMounts) == 0 {
 		return nil
 	}
@@ -111,7 +64,7 @@ func (c *Config) controlPlaneNode() *v1alpha4.Node {
 // (CoreDNS image and the API server authentication webhook). Combining them
 // into one patch avoids depending on the merge order of multiple patches. It
 // returns "" when no override applies.
-func (c *Config) clusterConfigurationPatch() string {
+func clusterConfigurationPatch(c *clusterprovider.Config) string {
 	dns := c.CoreDNSImageRepository != "" || c.CoreDNSImageTag != ""
 	if !dns && c.AuthWebhook == nil {
 		return ""
@@ -126,7 +79,7 @@ func (c *Config) clusterConfigurationPatch() string {
 	}
 
 	if c.AuthWebhook != nil {
-		b.WriteString(c.apiServerSection())
+		b.WriteString(apiServerSection(c))
 	}
 
 	return b.String()
@@ -136,7 +89,7 @@ func (c *Config) clusterConfigurationPatch() string {
 // patch wiring up the authentication token webhook. The extraArgs shape
 // differs between kubeadm API versions: v1beta3 uses a map, v1beta4 a list of
 // {name, value}.
-func (c *Config) apiServerSection() string {
+func apiServerSection(c *clusterprovider.Config) string {
 	w := c.AuthWebhook
 
 	var b strings.Builder

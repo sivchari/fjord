@@ -2,10 +2,11 @@
 // authentication token webhook needs before a cluster is created: the
 // authenticator's TLS serving certificate and the webhook kubeconfig
 // kube-apiserver calls. Stage writes these under a host directory;
-// internal/kind.Config.ExtraMounts delivers them into the node before the API
-// server starts, and internal/kind.Config.AuthWebhook configures kubeadm to
-// call the authenticator. The authenticator itself runs as a DaemonSet
-// (cluster.EnsureAuthenticator), created after the cluster comes up.
+// internal/provider.Config.ExtraMounts delivers them into the node before
+// the API server starts, and internal/provider.Config.AuthWebhook
+// configures kubeadm to call the authenticator. The authenticator itself
+// runs as a DaemonSet (cluster.EnsureAuthenticator), created after the
+// cluster comes up.
 package authn
 
 import (
@@ -17,8 +18,8 @@ import (
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 
 	"github.com/sivchari/fjord/internal/cluster"
-	"github.com/sivchari/fjord/internal/kind"
 	"github.com/sivchari/fjord/internal/pki"
+	"github.com/sivchari/fjord/internal/provider"
 )
 
 const (
@@ -27,7 +28,7 @@ const (
 	authnDirName = "authn"
 
 	// nodeAuthnDir is where the authn subdirectory is mounted inside the
-	// control-plane node, matching kind.AuthWebhook.VolumeHostPath /
+	// control-plane node, matching provider.AuthWebhook.VolumeHostPath /
 	// VolumeMountPath and the ConfigFilePath's parent directory. The
 	// authenticator DaemonSet also hostPath-mounts it for its TLS material.
 	nodeAuthnDir = "/etc/fjord/authn"
@@ -61,24 +62,25 @@ const (
 )
 
 // StagedAuthn is the result of Stage: the host directory holding the
-// authenticator's staged files, the kind.Mounts delivering them to the
-// control-plane node, and the kind.AuthWebhook configuring kubeadm to call
-// the authenticator.
+// authenticator's staged files, the provider.Mounts delivering them to the
+// control-plane node, and the provider.AuthWebhook configuring kubeadm to
+// call the authenticator.
 type StagedAuthn struct {
 	// Dir is the host directory holding tls.crt, tls.key, and
 	// webhook.yaml (baseDir/authn).
 	Dir string
-	// Mounts are the kind.Mounts delivering Dir to the control-plane node.
-	Mounts []kind.Mount
+	// Mounts are the provider.Mounts delivering Dir to the control-plane
+	// node.
+	Mounts []provider.Mount
 	// Webhook configures kubeadm's apiserver authentication token webhook
 	// to call the authenticator via the mounted webhook.yaml.
-	Webhook *kind.AuthWebhook
+	Webhook *provider.AuthWebhook
 }
 
 // Stage writes the authenticator's TLS certificate and webhook kubeconfig
-// under baseDir, and returns the kind.Mounts and kind.AuthWebhook wiring them
-// into a cluster not yet created. ca issues the authenticator's serving
-// certificate (the same CA the webhook kubeconfig trusts).
+// under baseDir, and returns the provider.Mounts and provider.AuthWebhook
+// wiring them into a cluster not yet created. ca issues the authenticator's
+// serving certificate (the same CA the webhook kubeconfig trusts).
 func Stage(baseDir string, ca *pki.CA) (*StagedAuthn, error) {
 	dir := filepath.Join(baseDir, authnDirName)
 	if err := os.MkdirAll(dir, authnDirMode); err != nil {
@@ -95,10 +97,10 @@ func Stage(baseDir string, ca *pki.CA) (*StagedAuthn, error) {
 
 	return &StagedAuthn{
 		Dir: dir,
-		Mounts: []kind.Mount{
+		Mounts: []provider.Mount{
 			{HostPath: dir, ContainerPath: nodeAuthnDir},
 		},
-		Webhook: &kind.AuthWebhook{
+		Webhook: &provider.AuthWebhook{
 			ConfigFilePath:  nodeAuthnDir + "/" + webhookFileName,
 			VolumeName:      "fjord-authn",
 			VolumeHostPath:  nodeAuthnDir,

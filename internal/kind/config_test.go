@@ -7,11 +7,12 @@ import (
 	"sigs.k8s.io/kind/pkg/apis/config/v1alpha4"
 
 	"github.com/sivchari/fjord/internal/kind"
+	clusterprovider "github.com/sivchari/fjord/internal/provider"
 )
 
 type toV1Alpha4Test struct {
 	name              string
-	config            kind.Config
+	config            clusterprovider.Config
 	wantName          string
 	wantPatchCount    int
 	wantPatchContains []string
@@ -20,7 +21,7 @@ type toV1Alpha4Test struct {
 var toV1Alpha4Tests = []toV1Alpha4Test{
 	{
 		name: "without coredns override",
-		config: kind.Config{
+		config: clusterprovider.Config{
 			Name: "fjord",
 		},
 		wantName:       "fjord",
@@ -28,7 +29,7 @@ var toV1Alpha4Tests = []toV1Alpha4Test{
 	},
 	{
 		name: "with coredns override on 1.33 uses v1beta3",
-		config: kind.Config{
+		config: clusterprovider.Config{
 			Name:                   "fjord",
 			KubeVersion:            "v1.33.13",
 			CoreDNSImageRepository: "public.ecr.aws/eks-distro/coredns",
@@ -45,7 +46,7 @@ var toV1Alpha4Tests = []toV1Alpha4Test{
 	},
 	{
 		name: "with coredns override on 1.36 uses v1beta4",
-		config: kind.Config{
+		config: clusterprovider.Config{
 			Name:                   "fjord",
 			KubeVersion:            "v1.36.2",
 			CoreDNSImageRepository: "public.ecr.aws/eks-distro/coredns",
@@ -62,10 +63,10 @@ var toV1Alpha4Tests = []toV1Alpha4Test{
 	},
 	{
 		name: "auth webhook on 1.33 uses v1beta3 map extraArgs",
-		config: kind.Config{
+		config: clusterprovider.Config{
 			Name:        "fjord",
 			KubeVersion: "v1.33.13",
-			AuthWebhook: &kind.AuthWebhook{
+			AuthWebhook: &clusterprovider.AuthWebhook{
 				ConfigFilePath:  "/etc/fjord/authn/webhook.yaml",
 				VolumeName:      "fjord-authn",
 				VolumeHostPath:  "/etc/fjord/authn",
@@ -85,10 +86,10 @@ var toV1Alpha4Tests = []toV1Alpha4Test{
 	},
 	{
 		name: "auth webhook on 1.36 uses v1beta4 list extraArgs",
-		config: kind.Config{
+		config: clusterprovider.Config{
 			Name:        "fjord",
 			KubeVersion: "v1.36.2",
-			AuthWebhook: &kind.AuthWebhook{
+			AuthWebhook: &clusterprovider.AuthWebhook{
 				ConfigFilePath:  "/etc/fjord/authn/webhook.yaml",
 				VolumeName:      "fjord-authn",
 				VolumeHostPath:  "/etc/fjord/authn",
@@ -112,7 +113,7 @@ func TestConfig_ToV1Alpha4(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := tt.config.ToV1Alpha4()
+			got := kind.ToV1Alpha4(&tt.config)
 			assertConfigConverted(t, got, tt.wantName, tt.wantPatchCount, tt.wantPatchContains)
 		})
 	}
@@ -124,7 +125,7 @@ func TestConfig_ToV1Alpha4_HostPort(t *testing.T) {
 	t.Run("zero host port adds no port mapping", func(t *testing.T) {
 		t.Parallel()
 
-		got := (&kind.Config{Name: "fjord"}).ToV1Alpha4()
+		got := kind.ToV1Alpha4(&clusterprovider.Config{Name: "fjord"})
 
 		if len(got.Nodes) != 0 {
 			t.Errorf("Nodes = %+v, want empty", got.Nodes)
@@ -134,7 +135,7 @@ func TestConfig_ToV1Alpha4_HostPort(t *testing.T) {
 	t.Run("nonzero host port maps the agent NodePort to the control-plane node", func(t *testing.T) {
 		t.Parallel()
 
-		got := (&kind.Config{Name: "fjord", HostPort: int32(48080)}).ToV1Alpha4()
+		got := kind.ToV1Alpha4(&clusterprovider.Config{Name: "fjord", HostPort: int32(48080)})
 
 		if len(got.Nodes) != 1 {
 			t.Fatalf("len(Nodes) = %d, want 1", len(got.Nodes))

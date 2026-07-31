@@ -11,10 +11,10 @@ import (
 	"sigs.k8s.io/kind/pkg/cluster/nodeutils"
 )
 
-// LoadDockerImage saves the local docker image imageRef and loads it onto
-// every node of the cluster named name, equivalent to `kind load
-// docker-image`. imageRef must already exist in the local docker image
-// store (e.g. built via `docker build`).
+// LoadDockerImage implements clusterprovider.Provider. It saves the local
+// docker image imageRef and loads it onto every node of the cluster named
+// name, equivalent to `kind load docker-image`. imageRef must already exist
+// in the local docker image store (e.g. built via `docker build`).
 func (p *provider) LoadDockerImage(name, imageRef string) error {
 	nodeList, err := p.inner.ListInternalNodes(name)
 	if err != nil {

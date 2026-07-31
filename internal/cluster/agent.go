@@ -28,7 +28,7 @@ const (
 	// agentPort is the port fjord-agent's fake STS API listens on.
 	agentPort = 8080
 	// agentNodePort is the NodePort fjord-agent's fake STS API is published
-	// on, matching internal/kind.Config's ExtraPortMappings target.
+	// on, matching internal/provider.Config's HostPort translation target.
 	agentNodePort = 30080
 
 	// AgentTLSCertName is the Secret fjord-agent's IRSA injector webhook
@@ -410,8 +410,8 @@ func ensureService(ctx context.Context, client kubernetes.Interface, enableIRSA 
 }
 
 // ensureNodePortService creates the NodePort Service that publishes
-// fjord-agent's fake STS API to the host (via internal/kind.Config's
-// ExtraPortMappings) if it does not already exist.
+// fjord-agent's fake STS API to the host (via internal/provider.Config's
+// HostPort) if it does not already exist.
 func ensureNodePortService(ctx context.Context, client kubernetes.Interface) error {
 	svc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
