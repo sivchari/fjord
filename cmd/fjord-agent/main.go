@@ -100,8 +100,7 @@ func newServeAPICmd() *cobra.Command {
 		"AWS_ENDPOINT_URL value the injector webhook injects into IAM-identity pods for non-STS AWS calls (e.g. a local AWS emulator); empty disables it")
 	cmd.Flags().BoolVar(&opts.enableLoadBalancer, "enable-loadbalancer", false,
 		"start the LoadBalancer controller (agent.LoadBalancerController), which claims type: LoadBalancer Services with the cluster's node address(es); "+
-			"off by default because on kind clusters metallb owns LoadBalancer Services and two implementations racing on status would fight -- "+
-			"the fjord CLI enables this for rask-backed clusters, whose hostproc substrate has no metallb")
+			"off by default so the controller only runs when the fjord CLI explicitly asked for it (--with-loadbalancer)")
 
 	return cmd
 }
@@ -277,7 +276,7 @@ func shutdownServers(servers []managedServer) error {
 }
 
 // newServeIMDSCmd serves the fake EC2 instance metadata service pods use
-// to fetch temporary node-role credentials, as if fjord's kind nodes were
+// to fetch temporary node-role credentials, as if fjord's nodes were
 // real EC2 instances.
 func newServeIMDSCmd() *cobra.Command {
 	opts := &imdsServeOptions{}

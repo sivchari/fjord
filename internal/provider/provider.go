@@ -25,20 +25,11 @@ type Provider interface {
 
 // CreateOptions configures Provider.CreateCluster.
 type CreateOptions struct {
-	// NodeImage is kind-specific: it overrides the node image used for
-	// every node in Config, e.g. to select a specific Kubernetes version.
-	// Other implementations select the components a node runs differently
-	// (rask: ComponentDir, a directory of pre-extracted EKS-D component
-	// binaries). Implementations that have no notion of a node image ignore
-	// this field.
-	NodeImage string
-	// ComponentDir is rask-specific: it points at a directory of
-	// pre-extracted EKS-D Kubernetes component binaries rask runs the
-	// cluster's nodes from, matching the version selected by
-	// Config.KubeVersion. Other implementations select the components a
-	// node runs differently (kind: NodeImage, a prebuilt node image).
-	// Implementations that have no notion of a component directory ignore
-	// this field.
+	// ComponentDir points at a directory of pre-extracted EKS-D Kubernetes
+	// component binaries rask runs the cluster's nodes from, matching the
+	// version selected by Config.KubeVersion. Left empty, rask boots
+	// upstream Kubernetes instead (used on darwin, where rask's vz
+	// substrate does not yet support ComponentDir).
 	ComponentDir string
 	// Config is the cluster configuration to apply. If nil, the
 	// implementation's default single control-plane configuration is used.

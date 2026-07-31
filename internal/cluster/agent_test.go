@@ -16,7 +16,7 @@ func TestEnsureAgent(t *testing.T) {
 
 	client := fake.NewClientset()
 
-	if err := EnsureAgent(context.Background(), client, "ghcr.io/sivchari/fjord/agent:v1", false, ""); err != nil {
+	if err := EnsureAgent(context.Background(), client, "ghcr.io/sivchari/fjord/agent:v1", false, "", false); err != nil {
 		t.Fatalf("EnsureAgent: %v", err)
 	}
 
@@ -29,7 +29,7 @@ func TestEnsureAgentIdempotent(t *testing.T) {
 	client := fake.NewClientset()
 
 	for range 2 {
-		if err := EnsureAgent(context.Background(), client, "ghcr.io/sivchari/fjord/agent:v1", false, ""); err != nil {
+		if err := EnsureAgent(context.Background(), client, "ghcr.io/sivchari/fjord/agent:v1", false, "", false); err != nil {
 			t.Fatalf("EnsureAgent: %v", err)
 		}
 	}
@@ -42,11 +42,11 @@ func TestEnsureAgentUpdatesImage(t *testing.T) {
 
 	client := fake.NewClientset()
 
-	if err := EnsureAgent(context.Background(), client, "ghcr.io/sivchari/fjord/agent:v1", false, ""); err != nil {
+	if err := EnsureAgent(context.Background(), client, "ghcr.io/sivchari/fjord/agent:v1", false, "", false); err != nil {
 		t.Fatalf("EnsureAgent: %v", err)
 	}
 
-	if err := EnsureAgent(context.Background(), client, "ghcr.io/sivchari/fjord/agent:v2", false, ""); err != nil {
+	if err := EnsureAgent(context.Background(), client, "ghcr.io/sivchari/fjord/agent:v2", false, "", false); err != nil {
 		t.Fatalf("EnsureAgent: %v", err)
 	}
 
@@ -58,7 +58,7 @@ func TestEnsureAgentEnableIRSA(t *testing.T) {
 
 	client := fake.NewClientset()
 
-	if err := EnsureAgent(context.Background(), client, "ghcr.io/sivchari/fjord/agent:v1", true, ""); err != nil {
+	if err := EnsureAgent(context.Background(), client, "ghcr.io/sivchari/fjord/agent:v1", true, "", false); err != nil {
 		t.Fatalf("EnsureAgent: %v", err)
 	}
 
@@ -114,7 +114,7 @@ func TestEnsureAgentWithAWSEndpointURL(t *testing.T) {
 
 	client := fake.NewClientset()
 
-	if err := EnsureAgent(context.Background(), client, "ghcr.io/sivchari/fjord/agent:v1", true, "http://kumo.kube-system.svc:4566"); err != nil {
+	if err := EnsureAgent(context.Background(), client, "ghcr.io/sivchari/fjord/agent:v1", true, "http://kumo.kube-system.svc:4566", false); err != nil {
 		t.Fatalf("EnsureAgent: %v", err)
 	}
 
@@ -129,6 +129,34 @@ func TestEnsureAgentWithAWSEndpointURL(t *testing.T) {
 		"--tls-cert-file", "/etc/fjord/tls/tls.crt",
 		"--tls-key-file", "/etc/fjord/tls/tls.key",
 		"--aws-endpoint-url", "http://kumo.kube-system.svc:4566",
+	}
+
+	if got := deployment.Spec.Template.Spec.Containers[0].Args; !slices.Equal(got, wantArgs) {
+		t.Errorf("container args = %v, want %v", got, wantArgs)
+	}
+}
+
+// TestEnsureAgentEnableLoadBalancer verifies enableLoadBalancer=true adds
+// --enable-loadbalancer to the container args, so fjord-agent starts its
+// LoadBalancer controller.
+func TestEnsureAgentEnableLoadBalancer(t *testing.T) {
+	t.Parallel()
+
+	client := fake.NewClientset()
+
+	if err := EnsureAgent(context.Background(), client, "ghcr.io/sivchari/fjord/agent:v1", false, "", true); err != nil {
+		t.Fatalf("EnsureAgent: %v", err)
+	}
+
+	deployment, err := client.AppsV1().Deployments(agent.SystemNamespace).Get(context.Background(), agentName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get deployment: %v", err)
+	}
+
+	wantArgs := []string{
+		"serve", "api", "--port", "8080",
+		"--injector-port", "0",
+		"--enable-loadbalancer",
 	}
 
 	if got := deployment.Spec.Template.Spec.Containers[0].Args; !slices.Equal(got, wantArgs) {

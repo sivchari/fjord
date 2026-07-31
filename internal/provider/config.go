@@ -27,22 +27,15 @@ type Config struct {
 	// Name is the cluster name.
 	Name string
 	// KubeVersion is the Kubernetes version the cluster runs (e.g.
-	// "v1.33.13"). It selects the kubeadm config API version for patches
-	// and must match the node image (kind: NodeImage in CreateOptions;
-	// rask: paired with a component directory).
+	// "v1.33.13"), matching the EKS-D release CreateOptions.ComponentDir was
+	// materialized from.
 	KubeVersion string
-	// CoreDNSImageRepository overrides the CoreDNS image repository via a
-	// kubeadm ClusterConfiguration patch. Leave empty to use the
-	// implementation's default.
+	// CoreDNSImageRepository overrides the CoreDNS image repository. Leave
+	// empty to use rask's default.
 	CoreDNSImageRepository string
-	// CoreDNSImageTag overrides the CoreDNS image tag via a kubeadm
-	// ClusterConfiguration patch. Leave empty to use the implementation's
-	// default.
+	// CoreDNSImageTag overrides the CoreDNS image tag. Leave empty to use
+	// rask's default.
 	CoreDNSImageTag string
-	// HostPort, if nonzero, publishes fjord-agent's NodePort Service on
-	// this host port, so callers outside the cluster can reach its fake STS
-	// API. Zero adds no port mapping.
-	HostPort int32
 	// ExtraMounts are host directories mounted into the control-plane node,
 	// used to deliver the authenticator's static pod manifest, webhook
 	// config, and TLS material before the API server starts.

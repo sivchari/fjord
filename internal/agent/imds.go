@@ -41,7 +41,7 @@ const (
 // security-credentials role and its temporary credentials, and region/AZ/
 // instance-identity metadata. It lets any pod with no
 // eks.amazonaws.com/role-arn annotation obtain node-role credentials as if
-// fjord's kind nodes were real EC2 instances running with an instance
+// fjord's nodes were real EC2 instances running with an instance
 // profile.
 type IMDS struct {
 	store      PrincipalStore

@@ -40,7 +40,7 @@ var imdsLabels = map[string]string{"app": imdsName}
 // node as a hostNetwork DaemonSet (fjord-imds) running `serve imds
 // --node-role-name nodeRoleName`, so pods with no
 // eks.amazonaws.com/role-arn annotation can still obtain node-role
-// credentials from 169.254.169.254 as if fjord's kind nodes were real EC2
+// credentials from 169.254.169.254 as if fjord's nodes were real EC2
 // instances. It reuses fjord-agent's ServiceAccount and ClusterRole (for
 // read/write access to the fjord-principals Secret), so callers must invoke
 // EnsureAgent first. It is idempotent; repeated calls update the DaemonSet

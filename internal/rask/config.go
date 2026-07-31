@@ -64,8 +64,8 @@ func mountDestPrefix(i int) string {
 
 // prebootFiles walks every host directory in mounts and returns one rask
 // PrebootFile per regular file found, so the whole tree Config.ExtraMounts
-// describes (kind: bind-mounted wholesale into the node) is delivered into
-// rask's cluster data directory before any cluster process starts.
+// describes is delivered into rask's cluster data directory before any
+// cluster process starts.
 func prebootFiles(mounts []clusterprovider.Mount) ([]raskcluster.PrebootFile, error) {
 	var files []raskcluster.PrebootFile
 
@@ -105,8 +105,8 @@ func prebootFiles(mounts []clusterprovider.Mount) ([]raskcluster.PrebootFile, er
 // raskcluster.Provider.KubeConfigPath before Create runs — see
 // raskcluster's Example_fjordIntegration).
 //
-// w.ConfigFilePath is a path inside the API server container, in kind's
-// mount vocabulary; it locates the owning mount by matching
+// w.ConfigFilePath is a path inside the API server container's mount
+// vocabulary; it locates the owning mount by matching
 // w.VolumeMountPath (the directory that path is documented to live under)
 // against each mount's ContainerPath, then rebuilds the equivalent rask
 // preboot path using the same mountDestPrefix scheme prebootFiles used for

@@ -11,18 +11,13 @@ func TestPrincipalRegistryOptions_Context(t *testing.T) {
 		want string
 	}{
 		{
-			name: "kind default derives kind-<name>",
-			opts: principalRegistryOptions{clusterName: "fjord", provider: providerKind},
-			want: "kind-fjord",
-		},
-		{
-			name: "rask default derives <name>",
-			opts: principalRegistryOptions{clusterName: "fjord", provider: providerRask},
+			name: "default derives the cluster name",
+			opts: principalRegistryOptions{clusterName: "fjord"},
 			want: "fjord",
 		},
 		{
-			name: "explicit --context overrides the provider default",
-			opts: principalRegistryOptions{clusterName: "fjord", provider: providerRask, kubeContext: "my-context"},
+			name: "explicit --context overrides the default",
+			opts: principalRegistryOptions{clusterName: "fjord", kubeContext: "my-context"},
 			want: "my-context",
 		},
 	}

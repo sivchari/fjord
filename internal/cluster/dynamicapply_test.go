@@ -164,3 +164,23 @@ func assertApplied(t *testing.T, dynamicClient *dynamicfake.FakeDynamicClient, n
 
 	return obj
 }
+
+// assertAppliedGVR fetches gvr's namespace/name and fails the test if it
+// does not exist. It is assertApplied's sibling for non-core-v1 GVRs (which
+// need an explicit Group).
+func assertAppliedGVR(t *testing.T, dynamicClient *dynamicfake.FakeDynamicClient, gvr schema.GroupVersionResource, namespace, name string) {
+	t.Helper()
+
+	client := dynamicClient.Resource(gvr)
+
+	var err error
+	if namespace == "" {
+		_, err = client.Get(t.Context(), name, metav1.GetOptions{})
+	} else {
+		_, err = client.Namespace(namespace).Get(t.Context(), name, metav1.GetOptions{})
+	}
+
+	if err != nil {
+		t.Fatalf("get %s %q: %v", gvr.Resource, name, err)
+	}
+}

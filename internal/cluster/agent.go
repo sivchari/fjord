@@ -29,9 +29,8 @@ const (
 	agentPort = 8080
 
 	// AgentNodePort is the NodePort fjord-agent's fake STS API is published
-	// on, matching internal/provider.Config's HostPort translation target
-	// (kind) or the port reachable directly on the host (rask, whose
-	// hostproc runtime shares the host network namespace).
+	// on. rask's hostproc runtime shares the host network namespace, so this
+	// port is reachable directly on the host without any port mapping.
 	AgentNodePort = 30080
 
 	// AgentTLSCertName is the Secret fjord-agent's IRSA injector webhook
@@ -61,8 +60,10 @@ var agentLabels = map[string]string{"app": agentName}
 // awsEndpointURL, when non-empty, is passed to the injector webhook via
 // --aws-endpoint-url, so it injects AWS_ENDPOINT_URL into IAM-identity pods
 // (see internal/agent.Injector's doc comment); an empty awsEndpointURL
-// leaves that injection disabled.
-func EnsureAgent(ctx context.Context, client kubernetes.Interface, image string, enableIRSA bool, awsEndpointURL string) error {
+// leaves that injection disabled. When enableLoadBalancer is true,
+// fjord-agent additionally runs its LoadBalancer controller (see
+// internal/agent.LoadBalancerController's doc comment).
+func EnsureAgent(ctx context.Context, client kubernetes.Interface, image string, enableIRSA bool, awsEndpointURL string, enableLoadBalancer bool) error {
 	if err := ensureServiceAccount(ctx, client); err != nil {
 		return err
 	}
@@ -75,7 +76,7 @@ func EnsureAgent(ctx context.Context, client kubernetes.Interface, image string,
 		return err
 	}
 
-	if err := ensureDeployment(ctx, client, image, enableIRSA, awsEndpointURL); err != nil {
+	if err := ensureDeployment(ctx, client, image, enableIRSA, awsEndpointURL, enableLoadBalancer); err != nil {
 		return err
 	}
 
@@ -260,8 +261,8 @@ func ensureClusterRoleBinding(ctx context.Context, client kubernetes.Interface) 
 // ensureDeployment creates fjord-agent's Deployment if it does not already
 // exist, or updates it in place (preserving its ResourceVersion) to run
 // image otherwise.
-func ensureDeployment(ctx context.Context, client kubernetes.Interface, image string, enableIRSA bool, awsEndpointURL string) error {
-	desired := agentDeployment(image, enableIRSA, awsEndpointURL)
+func ensureDeployment(ctx context.Context, client kubernetes.Interface, image string, enableIRSA bool, awsEndpointURL string, enableLoadBalancer bool) error {
+	desired := agentDeployment(image, enableIRSA, awsEndpointURL, enableLoadBalancer)
 
 	_, err := client.AppsV1().Deployments(agent.SystemNamespace).Create(ctx, desired, metav1.CreateOptions{})
 	if err == nil {
@@ -296,9 +297,9 @@ func ensureDeployment(ctx context.Context, client kubernetes.Interface, image st
 // agentDeployment builds the desired fjord-agent Deployment running image.
 // When enableIRSA is true, the pod additionally mounts AgentTLSCertName at
 // agentTLSMountPath and fjord-agent serves its IRSA injector webhook on
-// agentInjectorPort. awsEndpointURL is forwarded to agentContainerArgs; see
-// EnsureAgent's doc comment.
-func agentDeployment(image string, enableIRSA bool, awsEndpointURL string) *appsv1.Deployment {
+// agentInjectorPort. awsEndpointURL and enableLoadBalancer are forwarded to
+// agentContainerArgs; see EnsureAgent's doc comment.
+func agentDeployment(image string, enableIRSA bool, awsEndpointURL string, enableLoadBalancer bool) *appsv1.Deployment {
 	replicas := int32(1)
 
 	spec := corev1.PodSpec{
@@ -307,7 +308,7 @@ func agentDeployment(image string, enableIRSA bool, awsEndpointURL string) *apps
 			{
 				Name:  agentName,
 				Image: image,
-				Args:  agentContainerArgs(enableIRSA, awsEndpointURL),
+				Args:  agentContainerArgs(enableIRSA, awsEndpointURL, enableLoadBalancer),
 				Ports: []corev1.ContainerPort{
 					{Name: "http", ContainerPort: agentPort, Protocol: corev1.ProtocolTCP},
 				},
@@ -354,8 +355,10 @@ func agentDeployment(image string, enableIRSA bool, awsEndpointURL string) *apps
 // "do not serve the injector webhook". A non-empty awsEndpointURL is passed
 // via --aws-endpoint-url, so the injector also injects AWS_ENDPOINT_URL into
 // IAM-identity pods; an empty awsEndpointURL omits the flag, leaving that
-// injection disabled (fjord-agent's own default).
-func agentContainerArgs(enableIRSA bool, awsEndpointURL string) []string {
+// injection disabled (fjord-agent's own default). enableLoadBalancer true
+// additionally passes --enable-loadbalancer, starting fjord-agent's
+// LoadBalancer controller.
+func agentContainerArgs(enableIRSA bool, awsEndpointURL string, enableLoadBalancer bool) []string {
 	args := []string{"serve", "api", "--port", fmt.Sprintf("%d", agentPort)}
 
 	if !enableIRSA {
@@ -370,6 +373,10 @@ func agentContainerArgs(enableIRSA bool, awsEndpointURL string) []string {
 
 	if awsEndpointURL != "" {
 		args = append(args, "--aws-endpoint-url", awsEndpointURL)
+	}
+
+	if enableLoadBalancer {
+		args = append(args, "--enable-loadbalancer")
 	}
 
 	return args

@@ -9,9 +9,8 @@ import (
 // higher Level is more verbose.
 type Level int32
 
-// Logger is fjord's logging interface. It mirrors the shape of kind's
-// sigs.k8s.io/kind/pkg/log.Logger so that internal/kind can adapt it for
-// calls into kind's APIs, without fjord's own code depending on kind.
+// Logger is fjord's logging interface, used throughout cli and every other
+// package that needs to log.
 type Logger interface {
 	// Warn logs a warning message.
 	Warn(message string)

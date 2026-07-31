@@ -39,8 +39,8 @@ var clusterNetworkPolicyGVR = schema.GroupVersionResource{
 // CNPController watches networking.k8s.aws ClusterNetworkPolicy custom
 // resources and Namespaces, and reconciles the standard NetworkPolicy
 // objects TranslateClusterNetworkPolicy derives from them into the
-// cluster -- fjord's enforcement mechanism, since its CNI (kindnet)
-// understands standard NetworkPolicy but not ClusterNetworkPolicy.
+// cluster: ClusterNetworkPolicy is fjord's own CRD, so translating it into
+// standard NetworkPolicy objects is what lets the underlying CNI act on it.
 type CNPController struct {
 	client kubernetes.Interface
 

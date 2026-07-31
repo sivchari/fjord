@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"fmt"
 	"path/filepath"
 	"slices"
 	"testing"
@@ -9,12 +10,13 @@ import (
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 
 	"github.com/sivchari/fjord/internal/agent"
+	"github.com/sivchari/fjord/internal/cluster"
 )
 
-// testKindContext is the kind-managed kubeconfig context name every test in
-// this file seeds, standing in for the one `fjord create cluster` leaves
-// behind.
-const testKindContext = "kind-fjord"
+// testClusterContext is the kubeconfig context name every test in this file
+// seeds, standing in for the one `fjord create cluster` leaves behind (rask
+// names it exactly the cluster name).
+const testClusterContext = "fjord"
 
 func TestExecAuthInfo(t *testing.T) {
 	t.Parallel()
@@ -22,7 +24,6 @@ func TestExecAuthInfo(t *testing.T) {
 	opts := &updateKubeconfigOptions{
 		principalRegistryOptions: principalRegistryOptions{clusterName: "fjord"},
 		principal:                "alice",
-		hostPort:                 48080,
 	}
 	principal := &agent.Principal{AccessKeyID: "AKIAEXAMPLE", ARN: agent.PrincipalARN("alice"), Name: "alice"}
 
@@ -38,8 +39,9 @@ func TestExecAuthInfo(t *testing.T) {
 
 	env := execEnvMap(authInfo.Exec.Env)
 
-	if env["AWS_ENDPOINT_URL_STS"] != "http://localhost:48080" {
-		t.Errorf("AWS_ENDPOINT_URL_STS = %q, want %q", env["AWS_ENDPOINT_URL_STS"], "http://localhost:48080")
+	wantEndpoint := fmt.Sprintf("http://localhost:%d", cluster.AgentNodePort)
+	if env["AWS_ENDPOINT_URL_STS"] != wantEndpoint {
+		t.Errorf("AWS_ENDPOINT_URL_STS = %q, want %q", env["AWS_ENDPOINT_URL_STS"], wantEndpoint)
 	}
 
 	if env["AWS_ACCESS_KEY_ID"] != "AKIAEXAMPLE" {
@@ -86,7 +88,7 @@ func TestLoadOrNewKubeconfig_ExistingFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config")
 
 	seed := clientcmdapi.NewConfig()
-	seed.CurrentContext = testKindContext
+	seed.CurrentContext = testClusterContext
 
 	if err := clientcmd.WriteToFile(*seed, path); err != nil {
 		t.Fatalf("seed kubeconfig: %v", err)
@@ -97,12 +99,12 @@ func TestLoadOrNewKubeconfig_ExistingFile(t *testing.T) {
 		t.Fatalf("loadOrNewKubeconfig() error = %v", err)
 	}
 
-	if config.CurrentContext != testKindContext {
-		t.Errorf("CurrentContext = %q, want %q", config.CurrentContext, testKindContext)
+	if config.CurrentContext != testClusterContext {
+		t.Errorf("CurrentContext = %q, want %q", config.CurrentContext, testClusterContext)
 	}
 }
 
-func TestLoadKindClusterConfig_MissingContext(t *testing.T) {
+func TestLoadClusterConfig_MissingContext(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config")
 	t.Setenv("KUBECONFIG", path)
 
@@ -111,42 +113,41 @@ func TestLoadKindClusterConfig_MissingContext(t *testing.T) {
 		t.Fatalf("seed kubeconfig: %v", err)
 	}
 
-	if _, err := loadKindClusterConfig(testKindContext); err == nil {
-		t.Fatal("loadKindClusterConfig() error = nil, want an error")
+	if _, err := loadClusterConfig(testClusterContext); err == nil {
+		t.Fatal("loadClusterConfig() error = nil, want an error")
 	}
 }
 
-// TestWriteKubeconfigEntry exercises loadKindClusterConfig and
+// TestWriteKubeconfigEntry exercises loadClusterConfig and
 // writeKubeconfigEntry together against a seeded kubeconfig standing in for
-// the one kind writes on `fjord create cluster`, verifying the new
+// the one rask writes on `fjord create cluster`, verifying the new
 // principal context is added (and made current) without disturbing the
-// existing kind-fjord entry.
+// existing entry.
 func TestWriteKubeconfigEntry(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config")
 	t.Setenv("KUBECONFIG", path)
 
 	existing := clientcmdapi.NewConfig()
-	existing.Clusters[testKindContext] = &clientcmdapi.Cluster{
+	existing.Clusters[testClusterContext] = &clientcmdapi.Cluster{
 		Server:                   "https://127.0.0.1:6443",
 		CertificateAuthorityData: []byte("fake-ca"),
 	}
-	existing.Contexts[testKindContext] = &clientcmdapi.Context{Cluster: testKindContext, AuthInfo: testKindContext}
-	existing.AuthInfos[testKindContext] = &clientcmdapi.AuthInfo{Token: "fake-token"}
-	existing.CurrentContext = testKindContext
+	existing.Contexts[testClusterContext] = &clientcmdapi.Context{Cluster: testClusterContext, AuthInfo: testClusterContext}
+	existing.AuthInfos[testClusterContext] = &clientcmdapi.AuthInfo{Token: "fake-token"}
+	existing.CurrentContext = testClusterContext
 
 	if err := clientcmd.WriteToFile(*existing, path); err != nil {
 		t.Fatalf("seed kubeconfig: %v", err)
 	}
 
-	sourceCluster, err := loadKindClusterConfig(testKindContext)
+	sourceCluster, err := loadClusterConfig(testClusterContext)
 	if err != nil {
-		t.Fatalf("loadKindClusterConfig() error = %v", err)
+		t.Fatalf("loadClusterConfig() error = %v", err)
 	}
 
 	opts := &updateKubeconfigOptions{
 		principalRegistryOptions: principalRegistryOptions{clusterName: "fjord"},
 		principal:                "alice",
-		hostPort:                 48080,
 	}
 	principal := &agent.Principal{AccessKeyID: "AKIAEXAMPLE", ARN: agent.PrincipalARN("alice"), Name: "alice"}
 
@@ -168,7 +169,7 @@ func TestWriteKubeconfigEntry(t *testing.T) {
 }
 
 // assertWrittenKubeconfig reloads path and verifies wantContext was added
-// and made current without removing the pre-existing kind-fjord entry.
+// and made current without removing the pre-existing entry.
 func assertWrittenKubeconfig(t *testing.T, path, wantContext string) {
 	t.Helper()
 
@@ -181,8 +182,8 @@ func assertWrittenKubeconfig(t *testing.T, path, wantContext string) {
 		t.Errorf("CurrentContext = %q, want %q", updated.CurrentContext, wantContext)
 	}
 
-	if _, ok := updated.Contexts[testKindContext]; !ok {
-		t.Errorf("pre-existing context %q was removed", testKindContext)
+	if _, ok := updated.Contexts[testClusterContext]; !ok {
+		t.Errorf("pre-existing context %q was removed", testClusterContext)
 	}
 
 	newCluster, ok := updated.Clusters[wantContext]

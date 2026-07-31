@@ -15,7 +15,7 @@ func NewRootCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:           "fjord",
 		Short:         "fjord runs EKS-compatible Kubernetes clusters locally",
-		Long:          "fjord creates local Kubernetes clusters that behave like Amazon EKS from the inside, built from EKS Distro with the same UX as kind.",
+		Long:          "fjord creates local Kubernetes clusters that behave like Amazon EKS from the inside, built from EKS Distro.",
 		Version:       fjord.Version,
 		SilenceUsage:  true,
 		SilenceErrors: true,

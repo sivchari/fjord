@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/sivchari/fjord/internal/agent"
+	"github.com/sivchari/fjord/internal/cluster"
 	"github.com/sivchari/fjord/internal/logger"
 )
 
@@ -61,7 +62,6 @@ type accessEntryOptions struct {
 	namespace string
 	username  string
 	groups    []string
-	hostPort  int32
 }
 
 func newGrantCmd(logger logger.Logger) *cobra.Command {
@@ -92,8 +92,6 @@ func newGrantAccessEntryCmd(_ logger.Logger) *cobra.Command {
 	cmd.Flags().StringVar(&opts.namespace, "namespace", "", "namespace to scope the policy to (default: cluster-wide)")
 	cmd.Flags().StringVar(&opts.username, "username", "", "Kubernetes username the principal authenticates as (default: its principal ARN)")
 	cmd.Flags().StringSliceVar(&opts.groups, "group", nil, "additional Kubernetes group(s) the principal authenticates as")
-	cmd.Flags().Int32Var(&opts.hostPort, "agent-host-port", defaultAgentHostPort,
-		"host port fjord-agent's EKS API facade is published on (default: 48080 for --provider kind, 30080 for --provider rask)")
 
 	_ = cmd.MarkFlagRequired("principal")
 	_ = cmd.MarkFlagRequired("policy")
@@ -117,8 +115,7 @@ func runGrantAccessEntry(cmd *cobra.Command, opts *accessEntryOptions) error {
 		return fmt.Errorf("resolve principal %q: %w", opts.principal, err)
 	}
 
-	hostPort := resolveAgentHostPort(cmd.Flags().Changed("agent-host-port"), opts.provider, opts.hostPort)
-	baseURL := fmt.Sprintf("http://localhost:%d/clusters/%s", hostPort, opts.clusterName)
+	baseURL := fmt.Sprintf("http://localhost:%d/clusters/%s", cluster.AgentNodePort, opts.clusterName)
 
 	if err := createAccessEntry(cmd.Context(), baseURL, principal.ARN, opts.username, opts.groups); err != nil {
 		return err

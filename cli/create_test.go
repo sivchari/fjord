@@ -72,31 +72,31 @@ func TestValidateCreateClusterOptions(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			name: "kind on darwin is fine",
-			opts: &createClusterOptions{provider: providerKind},
-			goos: "darwin",
-		},
-		{
-			name: "rask on linux is fine",
-			opts: &createClusterOptions{provider: providerRask},
+			name: "linux is fine",
+			opts: &createClusterOptions{enableAuth: true},
 			goos: "linux",
 		},
 		{
-			name:    "rask on darwin is rejected",
-			opts:    &createClusterOptions{provider: providerRask},
+			name: "darwin with auth disabled is fine",
+			opts: &createClusterOptions{enableAuth: false},
+			goos: "darwin",
+		},
+		{
+			name:    "darwin with auth enabled is rejected",
+			opts:    &createClusterOptions{enableAuth: true},
 			goos:    "darwin",
 			wantErr: true,
 		},
 		{
-			name:    "rask with --with-loadbalancer is rejected",
-			opts:    &createClusterOptions{provider: providerRask, withLoadBalancer: true},
+			name:    "--with-loadbalancer without --enable-auth is rejected",
+			opts:    &createClusterOptions{enableAuth: false, withLoadBalancer: true},
 			goos:    "linux",
 			wantErr: true,
 		},
 		{
-			name: "kind with --with-loadbalancer is fine",
-			opts: &createClusterOptions{provider: providerKind, withLoadBalancer: true},
-			goos: "darwin",
+			name: "--with-loadbalancer with --enable-auth is fine",
+			opts: &createClusterOptions{enableAuth: true, withLoadBalancer: true},
+			goos: "linux",
 		},
 	}
 
@@ -121,19 +121,14 @@ func TestClusterReadyMessage(t *testing.T) {
 		want string
 	}{
 		{
-			name: "kind with auth enabled",
-			opts: &createClusterOptions{name: "fjord", provider: providerKind, enableAuth: true, hostPort: 48080},
-			want: `Cluster "fjord" is ready. Set kubectl context to "kind-fjord". fjord-agent's fake STS API is reachable at localhost:48080.`,
-		},
-		{
-			name: "kind with auth disabled omits the endpoint",
-			opts: &createClusterOptions{name: "fjord", provider: providerKind, enableAuth: false},
-			want: `Cluster "fjord" is ready. Set kubectl context to "kind-fjord".`,
-		},
-		{
-			name: "rask with auth enabled reports the fixed NodePort",
-			opts: &createClusterOptions{name: "fjord", provider: providerRask, enableAuth: true, hostPort: 48080},
+			name: "auth enabled reports the fixed NodePort",
+			opts: &createClusterOptions{name: "fjord", enableAuth: true},
 			want: `Cluster "fjord" is ready. Set kubectl context to "fjord". fjord-agent's fake STS API is reachable at localhost:30080.`,
+		},
+		{
+			name: "auth disabled omits the endpoint",
+			opts: &createClusterOptions{name: "fjord", enableAuth: false},
+			want: `Cluster "fjord" is ready. Set kubectl context to "fjord".`,
 		},
 	}
 
@@ -143,41 +138,6 @@ func TestClusterReadyMessage(t *testing.T) {
 
 			if got := clusterReadyMessage(tt.opts); got != tt.want {
 				t.Errorf("clusterReadyMessage() = %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestAgentHostPort(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name       string
-		enableAuth bool
-		hostPort   int32
-		want       int32
-	}{
-		{
-			name:       "auth enabled publishes the configured host port",
-			enableAuth: true,
-			hostPort:   48080,
-			want:       48080,
-		},
-		{
-			name:       "auth disabled publishes no port",
-			enableAuth: false,
-			hostPort:   48080,
-			want:       0,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			got := agentHostPort(tt.enableAuth, tt.hostPort)
-			if got != tt.want {
-				t.Errorf("agentHostPort(%v, %d) = %d, want %d", tt.enableAuth, tt.hostPort, got, tt.want)
 			}
 		})
 	}

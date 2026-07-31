@@ -22,16 +22,16 @@ const LoadBalancerControllerResyncPeriod = 5 * time.Minute
 // LoadBalancerController is a k3s-servicelb ("klipper")-style controller
 // for fjord's rask substrate: rask runs the cluster directly in the host's
 // network namespace, so there is no docker network to carve a LoadBalancer
-// address pool from the way metallb does for fjord's kind backend. Instead,
-// LoadBalancerController watches Services and, for every class-less
-// type: LoadBalancer Service with no status.loadBalancer.ingress yet,
-// claims it by publishing the cluster's node address(es) there -- since
-// under hostproc the node IP is host-reachable and kube-proxy already DNATs
-// LoadBalancer ingress IPs (and NodePorts) to it.
+// address pool from. Instead, LoadBalancerController watches Services and,
+// for every class-less type: LoadBalancer Service with no
+// status.loadBalancer.ingress yet, claims it by publishing the cluster's
+// node address(es) there -- since under hostproc the node IP is
+// host-reachable and kube-proxy already DNATs LoadBalancer ingress IPs (and
+// NodePorts) to it.
 //
 // It never touches a Service whose ingress is already populated, by us or
-// by anything else (e.g. metallb), so it can coexist with another
-// LoadBalancer implementation without the two racing on status.
+// by anything else, so it can coexist with another LoadBalancer
+// implementation without the two racing on status.
 type LoadBalancerController struct {
 	client kubernetes.Interface
 

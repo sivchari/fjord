@@ -31,13 +31,15 @@ const (
 	eksVersion    = "1.33"
 	createTimeout = 25 * time.Minute
 
-	// kubeContext is the kubeconfig context kind wrote for clusterName.
-	kubeContext = "kind-" + clusterName
+	// kubeContext is the kubeconfig context rask wrote for clusterName: rask
+	// names a cluster's context exactly its cluster name.
+	kubeContext = clusterName
 
 	// agentHostPort is the host port fjord-agent's fake STS API and EKS API
-	// facade are published on, matching cli's defaultAgentHostPort (the
-	// create cluster command below does not override it).
-	agentHostPort = "48080"
+	// facade are published on, matching cluster.AgentNodePort (rask's
+	// hostproc runtime shares the host network namespace, so this NodePort
+	// is reachable directly on the host).
+	agentHostPort = "30080"
 
 	// awsSTSEndpoint is the in-cluster DNS name and port pods reach
 	// fjord-agent's fake STS API through, matching
@@ -216,7 +218,7 @@ func buildCLI(t *testing.T) string {
 	return bin
 }
 
-// newClient builds a Kubernetes client from the kubeconfig context kind
+// newClient builds a Kubernetes client from the kubeconfig context rask
 // wrote for the e2e cluster.
 func newClient(t *testing.T) kubernetes.Interface {
 	t.Helper()

@@ -1,44 +1,41 @@
 # fjord
 
-fjord runs an EKS-compatible Kubernetes cluster on your local machine, with the same UX as kind.
+fjord runs an EKS-compatible Kubernetes cluster on your local machine, built on [rask](https://github.com/sivchari/rask).
 
-Manifests written for Amazon EKS apply as-is: the control plane is built from [EKS Distro](https://distro.eks.amazonaws.com/) (the Kubernetes distribution used by Amazon EKS), so the cluster reports an EKS version string and runs the same patched components as a real EKS cluster.
+Manifests written for Amazon EKS apply as-is: on Linux, the control plane is built from [EKS Distro](https://distro.eks.amazonaws.com/) (the Kubernetes distribution used by Amazon EKS), so the cluster reports an EKS version string and runs the same patched components as a real EKS cluster. On macOS, rask's vz substrate does not yet support EKS Distro component overrides, so the control plane runs upstream Kubernetes instead; fjord's AWS emulation layer (IRSA, IMDS, EKS Pod Identity, access-entry authentication) still works there.
 
 ```console
 $ fjord create cluster --eks-version 1.33
-$ kubectl version --context kind-fjord
+$ kubectl version --context fjord
 Server Version: v1.33.13-eks-...
 ```
 
 ## Why
 
-Developing against EKS locally usually means kind plus a pile of workarounds: excluded manifests, overlay hacks for `gp2`/`gp3` StorageClasses, and "this only works in the real cluster" caveats. fjord removes those diffs at the cluster level instead of patching them in your manifests.
+Developing against EKS locally usually means a pile of workarounds: excluded manifests, overlay hacks for `gp2`/`gp3` StorageClasses, and "this only works in the real cluster" caveats. fjord removes those diffs at the cluster level instead of patching them in your manifests.
 
-What you get out of the box, matching a new EKS cluster:
+What you get out of the box, matching a new EKS cluster (Linux):
 
 - kube-apiserver / kube-controller-manager / kube-scheduler / kube-proxy built by EKS Distro, reporting an `-eks-` version string
 - CoreDNS from the EKS Distro build for the selected EKS version
-- `gp2` (default) and `gp3` StorageClasses (backed locally by kind's local-path provisioner) so EKS PVCs bind unchanged
+- `gp2` (default) and `gp3` StorageClasses (backed locally by rask's bundled local-path provisioner) so EKS PVCs bind unchanged
 - IAM integration: IRSA, EKS Pod Identity, IMDS, and access-entry authentication (see below)
 - Supported EKS versions 1.29 through 1.36, resolved from a release table that CI keeps in sync with new EKS Distro patch releases
 
 ## Usage
 
 ```console
-# Create a cluster (pulls the prebuilt node image for the requested EKS version)
+# Create a cluster (materializes EKS Distro components for the requested version, on Linux)
 fjord create cluster --eks-version 1.33
 
 # Delete it
 fjord delete cluster
 
-# Build a node image locally from EKS Distro artifacts instead of pulling
+# Build and load the fjord-agent image locally instead of pulling the published one
 fjord create cluster --eks-version 1.33 --build-local
-
-# List supported EKS versions
-fjord build node-image --list-versions
 ```
 
-Node images are published to `ghcr.io/sivchari/fjord/node` and the agent image to `ghcr.io/sivchari/fjord/agent`, both for all supported EKS versions (amd64/arm64).
+The fjord-agent image is published to `ghcr.io/sivchari/fjord/agent` for all supported EKS versions (amd64/arm64).
 
 ## IAM integration
 
@@ -54,7 +51,7 @@ kubectl annotate serviceaccount my-sa eks.amazonaws.com/role-arn=arn:aws:iam::00
 **EKS Pod Identity** — associate a ServiceAccount with a role; pods reach credentials through the upstream Pod Identity Agent:
 
 ```console
-aws eks create-pod-identity-association --endpoint-url http://localhost:48080 \
+aws eks create-pod-identity-association --endpoint-url http://localhost:30080 \
   --cluster-name fjord --namespace default --service-account my-sa \
   --role-arn arn:aws:iam::000000000000:role/my-role
 ```
@@ -83,23 +80,23 @@ The standard access policies map to the built-in Kubernetes roles: `ClusterAdmin
 fjord answers the read side of the EKS API, so `aws eks`, `eksctl`, and terraform's `aws_eks_cluster` data source can inspect it like a real cluster:
 
 ```console
-aws eks list-clusters   --endpoint-url http://localhost:48080
-aws eks describe-cluster --name fjord --endpoint-url http://localhost:48080   # version, oidc issuer, networkConfig, accessConfig, ...
-aws eks list-addons     --cluster-name fjord --endpoint-url http://localhost:48080   # coredns, kube-proxy, eks-pod-identity-agent
+aws eks list-clusters   --endpoint-url http://localhost:30080
+aws eks describe-cluster --name fjord --endpoint-url http://localhost:30080   # version, oidc issuer, networkConfig, accessConfig, ...
+aws eks list-addons     --cluster-name fjord --endpoint-url http://localhost:30080   # coredns, kube-proxy, eks-pod-identity-agent
 ```
 
-`describe-addon` reports only the addons fjord actually runs; asking for one it does not (e.g. `vpc-cni`, since fjord uses kindnet) returns `ResourceNotFoundException`, matching EKS.
+`describe-addon` reports only the addons fjord actually runs; asking for one it does not (e.g. `vpc-cni`, since fjord's rask substrate provides its own pod networking) returns `ResourceNotFoundException`, matching EKS.
 
 ## LoadBalancer services
 
-`--with-loadbalancer` deploys [metallb](https://metallb.io/) in L2 mode with an address pool carved from the kind docker network, so `type: LoadBalancer` Services get a reachable external IP instead of staying `<pending>`.
+`--with-loadbalancer` (requires `--enable-auth`) starts fjord-agent's own LoadBalancer controller, which claims every class-less `type: LoadBalancer` Service with no external IP yet by publishing the cluster's node address(es) to it, since rask's hostproc runtime routes NodePort traffic through kube-proxy on the host.
 
 ## Development
 
 ```console
 make test              # unit tests
 make lint              # golangci-lint
-make test-integration  # end-to-end: builds a node image, creates a real cluster, verifies EKS parity
+make test-integration  # end-to-end: creates a real cluster, verifies EKS parity
 make generate          # refresh the EKS Distro release table
 ```
 

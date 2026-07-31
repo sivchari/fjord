@@ -13,8 +13,8 @@ const dummyAddonVersion = "v1.0.0-eksbuild.1"
 
 // managedAddons lists the addon names fjord actually deploys, matching real
 // EKS addon names so `aws eks list-addons`/`describe-addon` can query them.
-// vpc-cni is intentionally excluded: fjord uses kindnet for pod networking,
-// not the VPC CNI plugin.
+// vpc-cni is intentionally excluded: fjord's rask substrate provides its own
+// pod networking, not the VPC CNI plugin.
 var managedAddons = []string{"coredns", "kube-proxy", "eks-pod-identity-agent"}
 
 // listAddonsResponse is the response body of GET /clusters/{name}/addons.

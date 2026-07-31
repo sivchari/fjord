@@ -9,6 +9,7 @@ import (
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 
 	"github.com/sivchari/fjord/internal/agent"
+	"github.com/sivchari/fjord/internal/cluster"
 	"github.com/sivchari/fjord/internal/logger"
 )
 
@@ -32,7 +33,6 @@ const (
 type updateKubeconfigOptions struct {
 	principalRegistryOptions
 	principal string
-	hostPort  int32
 }
 
 func newUpdateKubeconfigCmd(logger logger.Logger) *cobra.Command {
@@ -49,8 +49,6 @@ func newUpdateKubeconfigCmd(logger logger.Logger) *cobra.Command {
 
 	opts.registerFlags(cmd)
 	cmd.Flags().StringVar(&opts.principal, "principal", "", "principal name registered via \"fjord create principal\"")
-	cmd.Flags().Int32Var(&opts.hostPort, "agent-host-port", defaultAgentHostPort,
-		"host port fjord-agent's fake STS API is published on (default: 48080 for --provider kind, 30080 for --provider rask)")
 
 	_ = cmd.MarkFlagRequired("principal")
 
@@ -68,9 +66,7 @@ func runUpdateKubeconfig(cmd *cobra.Command, logger logger.Logger, opts *updateK
 		return fmt.Errorf("resolve principal %q: %w", opts.principal, err)
 	}
 
-	opts.hostPort = resolveAgentHostPort(cmd.Flags().Changed("agent-host-port"), opts.provider, opts.hostPort)
-
-	sourceCluster, err := loadKindClusterConfig(opts.context())
+	sourceCluster, err := loadClusterConfig(opts.context())
 	if err != nil {
 		return err
 	}
@@ -85,10 +81,10 @@ func runUpdateKubeconfig(cmd *cobra.Command, logger logger.Logger, opts *updateK
 	return nil
 }
 
-// loadKindClusterConfig returns the Cluster (server URL and certificate
-// authority) kind wrote for kubeContext in the default kubeconfig, the same
+// loadClusterConfig returns the Cluster (server URL and certificate
+// authority) rask wrote for kubeContext in the default kubeconfig, the same
 // entry `fjord create cluster` left behind.
-func loadKindClusterConfig(kubeContext string) (*clientcmdapi.Cluster, error) {
+func loadClusterConfig(kubeContext string) (*clientcmdapi.Cluster, error) {
 	rules := clientcmd.NewDefaultClientConfigLoadingRules()
 
 	config, err := rules.Load()
@@ -96,17 +92,17 @@ func loadKindClusterConfig(kubeContext string) (*clientcmdapi.Cluster, error) {
 		return nil, fmt.Errorf("load kubeconfig: %w", err)
 	}
 
-	kindContext, ok := config.Contexts[kubeContext]
+	entryContext, ok := config.Contexts[kubeContext]
 	if !ok {
 		return nil, fmt.Errorf("kubeconfig has no context %q", kubeContext)
 	}
 
-	kindCluster, ok := config.Clusters[kindContext.Cluster]
+	entryCluster, ok := config.Clusters[entryContext.Cluster]
 	if !ok {
-		return nil, fmt.Errorf("kubeconfig has no cluster %q", kindContext.Cluster)
+		return nil, fmt.Errorf("kubeconfig has no cluster %q", entryContext.Cluster)
 	}
 
-	return kindCluster, nil
+	return entryCluster, nil
 }
 
 // writeKubeconfigEntry adds a Cluster/AuthInfo/Context triple for
@@ -163,7 +159,7 @@ func execAuthInfo(opts *updateKubeconfigOptions, principal *agent.Principal) *cl
 			Command:    "aws",
 			Args:       []string{"--region", execAWSRegion, "eks", "get-token", "--cluster-name", opts.clusterName},
 			Env: []clientcmdapi.ExecEnvVar{
-				{Name: "AWS_ENDPOINT_URL_STS", Value: fmt.Sprintf("http://localhost:%d", opts.hostPort)},
+				{Name: "AWS_ENDPOINT_URL_STS", Value: fmt.Sprintf("http://localhost:%d", cluster.AgentNodePort)},
 				{Name: "AWS_ACCESS_KEY_ID", Value: principal.AccessKeyID},
 				{Name: "AWS_SECRET_ACCESS_KEY", Value: execAWSSignValue},
 			},

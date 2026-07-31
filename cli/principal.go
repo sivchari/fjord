@@ -17,25 +17,22 @@ import (
 type principalRegistryOptions struct {
 	clusterName string
 	kubeContext string
-	provider    string
 }
 
-// registerFlags attaches the shared --name/--context/--provider flags to
-// cmd.
+// registerFlags attaches the shared --name/--context flags to cmd.
 func (o *principalRegistryOptions) registerFlags(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&o.clusterName, "name", defaultClusterName, "cluster name")
-	cmd.Flags().StringVar(&o.kubeContext, "context", "", "kubeconfig context to use (default: kind-<name> for --provider kind, <name> for --provider rask)")
-	cmd.Flags().StringVar(&o.provider, "provider", providerKind, providerFlagUsage)
+	cmd.Flags().StringVar(&o.kubeContext, "context", "", "kubeconfig context to use (default: the cluster name)")
 }
 
-// context resolves o.kubeContext if set, otherwise the default context name
-// for o.clusterName under o.provider.
+// context resolves o.kubeContext if set, otherwise o.clusterName: rask names
+// a cluster's kubeconfig context exactly its cluster name.
 func (o *principalRegistryOptions) context() string {
 	if o.kubeContext != "" {
 		return o.kubeContext
 	}
 
-	return clusterContextName(o.provider, o.clusterName)
+	return o.clusterName
 }
 
 // client builds a Kubernetes client from the default kubeconfig, targeting

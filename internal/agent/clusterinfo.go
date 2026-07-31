@@ -27,7 +27,7 @@ var ErrClusterInfoNotFound = errors.New("agent: cluster info not found")
 
 // ClusterInfo is the cluster endpoint, certificate authority, and identity
 // DescribeCluster and ListClusters report, populated by `fjord create
-// cluster` from the kind-provisioned control plane's own kubeconfig and the
+// cluster` from the cluster's own kubeconfig and the
 // resolved EKS version.
 type ClusterInfo struct {
 	// Name is the cluster name, as passed to `fjord create cluster --name`.

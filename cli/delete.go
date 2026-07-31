@@ -20,10 +20,7 @@ func newDeleteCmd(logger logger.Logger) *cobra.Command {
 }
 
 func newDeleteClusterCmd(logger logger.Logger) *cobra.Command {
-	var (
-		name     string
-		provider string
-	)
+	var name string
 
 	cmd := &cobra.Command{
 		Use:   "cluster",
@@ -31,7 +28,7 @@ func newDeleteClusterCmd(logger logger.Logger) *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			logger.V(0).Infof("Deleting cluster %q ...", name)
 
-			clusterProvider, err := newClusterProvider(provider, logger)
+			clusterProvider, err := newClusterProvider()
 			if err != nil {
 				return err
 			}
@@ -45,7 +42,6 @@ func newDeleteClusterCmd(logger logger.Logger) *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&name, "name", defaultClusterName, "cluster name")
-	cmd.Flags().StringVar(&provider, "provider", providerKind, providerFlagUsage)
 
 	return cmd
 }
