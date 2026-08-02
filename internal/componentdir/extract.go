@@ -20,6 +20,7 @@ var binaries = []string{
 	"kube-scheduler",
 	"kubelet",
 	"kube-proxy",
+	"kubectl",
 }
 
 // serverBinDir is the directory binaries live under inside the EKS-D

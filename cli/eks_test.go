@@ -39,41 +39,6 @@ func TestLatestVersion(t *testing.T) {
 	}
 }
 
-func TestCoreDNSKubeadmRepository(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name     string
-		imageRef string
-		wantRepo string
-		wantTag  string
-	}{
-		{
-			name:     "eks-d coredns image",
-			imageRef: "public.ecr.aws/eks-distro/coredns/coredns:v1.12.0-eks-1-33-29",
-			wantRepo: "public.ecr.aws/eks-distro/coredns",
-			wantTag:  "v1.12.0-eks-1-33-29",
-		},
-		{
-			name:     "single path component",
-			imageRef: "coredns:v1.12.0",
-			wantRepo: "",
-			wantTag:  "v1.12.0",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			repo, tag := coreDNSKubeadmRepository(tt.imageRef)
-			if repo != tt.wantRepo || tag != tt.wantTag {
-				t.Errorf("coreDNSKubeadmRepository(%q) = (%q, %q), want (%q, %q)", tt.imageRef, repo, tag, tt.wantRepo, tt.wantTag)
-			}
-		})
-	}
-}
-
 func TestSplitImageRef(t *testing.T) {
 	t.Parallel()
 

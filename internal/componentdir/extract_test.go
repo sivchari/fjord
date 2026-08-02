@@ -55,11 +55,11 @@ func buildServerTarball(t *testing.T, entries []tarEntry) []byte {
 	return buf.Bytes()
 }
 
-// validEntries is a fixture EKS-D server tarball's entries: the five wanted
+// validEntries is a fixture EKS-D server tarball's entries: the wanted
 // binaries plus a couple of entries extractComponentDir must ignore
-// (kubectl, an unrelated top-level file, and a component image tar).
+// (kubeadm, an unrelated top-level file, and a component image tar).
 func validEntries() []tarEntry {
-	entries := make([]tarEntry, 0, len(binaries)+2)
+	entries := make([]tarEntry, 0, len(binaries)+3)
 
 	for _, name := range binaries {
 		entries = append(entries, tarEntry{
@@ -71,7 +71,7 @@ func validEntries() []tarEntry {
 
 	entries = append(entries,
 		tarEntry{name: "kubernetes/version", mode: 0o644, body: []byte("v1.33.13")},
-		tarEntry{name: "kubernetes/server/bin/kubectl", mode: 0o755, body: []byte("fake-kubectl-binary")},
+		tarEntry{name: "kubernetes/server/bin/kubeadm", mode: 0o755, body: []byte("fake-kubeadm-binary")},
 		tarEntry{name: "kubernetes/server/bin/kube-apiserver.tar", mode: 0o644, body: []byte("fake-image-tar")},
 	)
 

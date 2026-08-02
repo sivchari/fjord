@@ -269,7 +269,10 @@ func buildClusterConfig(opts *createClusterOptions, release *eksd.Release, goos 
 	}
 
 	if goos != goosDarwin {
-		config.CoreDNSImageRepository, config.CoreDNSImageTag = coreDNSKubeadmRepository(release.CoreDNSImage)
+		// The full repository path is passed through: rask joins
+		// repository:tag verbatim, unlike kubeadm, which appended the
+		// image name to a parent path itself.
+		config.CoreDNSImageRepository, config.CoreDNSImageTag = splitImageRef(release.CoreDNSImage)
 	}
 
 	if !opts.enableAuth {
