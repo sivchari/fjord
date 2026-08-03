@@ -36,7 +36,53 @@ fjord delete cluster
 fjord create cluster --eks-version 1.33 --build-local
 ```
 
+Clusters are named. `--name` defaults to `fjord`, and the name is also the kubectl
+context, which `create` merges into your default kubeconfig and makes current
+(`delete` removes it again). Several clusters can coexist:
+
+```console
+fjord create cluster --name alpha
+fjord create cluster --name beta
+kubectl --context alpha get nodes
+fjord delete cluster --name alpha
+```
+
 The fjord-agent image is published to `ghcr.io/sivchari/fjord/agent` for all supported EKS versions (amd64/arm64).
+
+## Running fjord inside a container
+
+fjord runs the control plane as host processes in whatever network namespace it is
+given, so it works inside a container — including a pod on another Kubernetes
+cluster — as long as the container can act like a node. That needs
+`privileged: true`: capabilities alone are not enough, because `/dev/kmsg` is
+absent and `/sys/fs/cgroup` is read-only without it.
+
+Four things bite in that setup, in the order you hit them:
+
+1. **Put the data directory on a real filesystem.** fjord's state lives under
+   `$HOME/.rask`. If that is on the container's overlayfs rootfs, the nested
+   containerd cannot mount its own overlay and every pod sandbox fails with
+   `failed to mount rootfs component ... invalid argument`. Point `HOME` at a
+   volume mount instead.
+
+2. **Isolate the cgroup namespace before touching cgroups.** A privileged pod
+   sees the *host's* cgroup namespace, so `/sys/fs/cgroup` is the node's root
+   cgroup and is writable. Preparing cgroups there rewrites the placement of
+   every process on the node. Do it inside `unshare --cgroup --mount`, make `/`
+   rprivate, remount `/sys/fs/cgroup`, then move your own processes into a child
+   cgroup so `cgroup.subtree_control` becomes writable.
+
+3. **Drop the outer cluster's environment.** Kubernetes injects
+   `KUBERNETES_SERVICE_HOST` and `KUBERNETES_SERVICE_PORT` into every pod. The
+   nested kube-controller-manager falls back to in-cluster config, talks to the
+   *outer* apiserver, and fails to start with
+   `configmaps "extension-apiserver-authentication" is forbidden`. Unset them.
+
+4. **Make `br_netfilter` loadable.** Without it, pod-to-pod traffic across the
+   bridge skips netfilter, so kube-proxy and NetworkPolicy are silently bypassed.
+   fjord loads it at startup, but `modprobe` reads the *container's*
+   `/lib/modules`, so mount the node's module tree read-only if the module is not
+   already loaded.
 
 ## IAM integration
 
