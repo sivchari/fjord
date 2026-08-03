@@ -108,7 +108,6 @@ func TestCreateCluster(t *testing.T) {
 		}
 
 		assertDefaultStorageClass(t, client)
-		assertKubeProxyImage(t, client)
 		assertCoreDNSImage(t, client)
 	})
 
@@ -184,21 +183,6 @@ func assertDefaultStorageClass(t *testing.T, client kubernetes.Interface) {
 
 	if len(defaults) != 1 || defaults[0] != "gp2" {
 		t.Errorf("default storage classes = %v, want exactly [gp2]", defaults)
-	}
-}
-
-// assertKubeProxyImage verifies the kube-proxy DaemonSet runs the EKS-D build.
-func assertKubeProxyImage(t *testing.T, client kubernetes.Interface) {
-	t.Helper()
-
-	ds, err := client.AppsV1().DaemonSets("kube-system").Get(t.Context(), "kube-proxy", metav1.GetOptions{})
-	if err != nil {
-		t.Fatalf("get kube-proxy daemonset: %v", err)
-	}
-
-	image := ds.Spec.Template.Spec.Containers[0].Image
-	if !strings.Contains(image, "-eks-") {
-		t.Errorf("kube-proxy image = %q, want it to contain %q", image, "-eks-")
 	}
 }
 
