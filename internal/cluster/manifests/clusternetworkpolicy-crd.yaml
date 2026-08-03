@@ -5,7 +5,9 @@
 # ClusterNetworkPolicy manifests succeeds unmodified; internal/agent's
 # CNPController then reconciles the subset of its spec
 # TranslateClusterNetworkPolicy understands into standard NetworkPolicy
-# objects, since fjord's CNI (kindnet) does not itself understand this CRD.
+# objects, which the bundled kube-network-policies enforcer (see
+# kube-network-policies.yaml) then enforces, since rask's bridge CNI does
+# not itself understand this CRD or NetworkPolicy.
 #
 # This schema only types the fields fjord's translation reads (tier,
 # priority, subject, ingress/egress name/action/from/ports); every object in

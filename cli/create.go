@@ -216,12 +216,15 @@ func validateCreateClusterOptions(opts *createClusterOptions, goos string) error
 }
 
 // applyEKSDefaultState brings a freshly created cluster to the default state
-// a new Amazon EKS cluster starts in: the gp2/gp3 StorageClasses, and the
+// a new Amazon EKS cluster starts in: the gp2/gp3 StorageClasses, the
 // ClusterNetworkPolicy (networking.k8s.aws/v1alpha1) and TargetGroupBinding
 // (elbv2.k8s.aws/v1beta1) CRDs registered so a real cluster's manifests for
-// either apply unmodified. Unlike --with-loadbalancer or --enable-auth, all
-// of these always run: fjord emulates them unconditionally, matching what
-// every real EKS cluster already has.
+// either apply unmodified, and the kube-network-policies enforcer deployed
+// so NetworkPolicy objects actually take effect (rask's bridge CNI enforces
+// nothing; real EKS enforces via the VPC CNI's network policy agent).
+// Unlike --with-loadbalancer or --enable-auth, all of these always run:
+// fjord emulates them unconditionally, matching what every real EKS cluster
+// already has.
 func applyEKSDefaultState(ctx context.Context, logger logger.Logger, provider clusterprovider.Provider, client kubernetes.Interface, name string) error {
 	logger.V(0).Info("Applying EKS default state (gp2 StorageClass) ...")
 
@@ -244,6 +247,12 @@ func applyEKSDefaultState(ctx context.Context, logger logger.Logger, provider cl
 
 	if err := cluster.EnsureTargetGroupBindingCRD(ctx, client, dynamicClient); err != nil {
 		return fmt.Errorf("ensure target group binding crd: %w", err)
+	}
+
+	logger.V(0).Info("Deploying the NetworkPolicy enforcer (kube-network-policies) ...")
+
+	if err := cluster.EnsureNetworkPolicyEnforcer(ctx, client, dynamicClient); err != nil {
+		return fmt.Errorf("ensure network policy enforcer: %w", err)
 	}
 
 	return nil

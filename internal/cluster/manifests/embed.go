@@ -12,3 +12,10 @@ import _ "embed"
 //
 //go:embed clusternetworkpolicy-crd.yaml
 var ClusterNetworkPolicyCRD []byte
+
+// KubeNetworkPolicies is the upstream kube-network-policies DaemonSet that
+// enforces NetworkPolicy objects, which rask's bridge CNI does not; see
+// kube-network-policies.yaml's header comment.
+//
+//go:embed kube-network-policies.yaml
+var KubeNetworkPolicies []byte
