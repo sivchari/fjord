@@ -35,7 +35,7 @@ func haroPreviewGatewayTGB() *targetGroupBinding {
 		},
 		Spec: targetGroupBindingSpec{
 			ServiceRef:     serviceReference{Name: "haro-preview-gateway-envoy", Port: intstr.FromInt32(80)},
-			TargetGroupARN: "arn:aws:elasticloadbalancing:ap-northeast-1:670823610084:targetgroup/layerone-haro-dev-envoy-gw/32df7db4c1f1d3a7",
+			TargetGroupARN: "arn:aws:elasticloadbalancing:ap-northeast-1:123456789012:targetgroup/example-gateway/32df7db4c1f1d3a7",
 			TargetType:     "ip",
 		},
 	}

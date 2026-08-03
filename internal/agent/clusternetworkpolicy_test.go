@@ -32,7 +32,7 @@ func haroCNP() ClusterNetworkPolicy {
 		Subject: CNPSubject{
 			Namespaces: &metav1.LabelSelector{
 				MatchExpressions: []metav1.LabelSelectorRequirement{
-					{Key: "haro.layerx.co.jp/user-id", Operator: metav1.LabelSelectorOpExists},
+					{Key: "workspace.fjord.example/user-id", Operator: metav1.LabelSelectorOpExists},
 				},
 			},
 		},

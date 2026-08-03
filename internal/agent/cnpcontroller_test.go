@@ -37,7 +37,7 @@ func unstructuredHaroCNP() *unstructured.Unstructured {
 			"subject": map[string]any{
 				"namespaces": map[string]any{
 					"matchExpressions": []any{
-						map[string]any{"key": "haro.layerx.co.jp/user-id", "operator": "Exists"},
+						map[string]any{"key": "workspace.fjord.example/user-id", "operator": "Exists"},
 					},
 				},
 			},
@@ -83,8 +83,8 @@ func TestDecodeClusterNetworkPolicy(t *testing.T) {
 		t.Fatalf("Subject.Namespaces = %+v, want one match expression", cnp.Subject.Namespaces)
 	}
 
-	if got := cnp.Subject.Namespaces.MatchExpressions[0].Key; got != "haro.layerx.co.jp/user-id" {
-		t.Errorf("Subject.Namespaces match expression key = %q, want %q", got, "haro.layerx.co.jp/user-id")
+	if got := cnp.Subject.Namespaces.MatchExpressions[0].Key; got != "workspace.fjord.example/user-id" {
+		t.Errorf("Subject.Namespaces match expression key = %q, want %q", got, "workspace.fjord.example/user-id")
 	}
 
 	if len(cnp.Ingress) != 1 {
@@ -141,9 +141,9 @@ func TestNamespaceMatches(t *testing.T) {
 		{
 			name: "matchExpressions Exists hit",
 			selector: &metav1.LabelSelector{MatchExpressions: []metav1.LabelSelectorRequirement{
-				{Key: "haro.layerx.co.jp/user-id", Operator: metav1.LabelSelectorOpExists},
+				{Key: "workspace.fjord.example/user-id", Operator: metav1.LabelSelectorOpExists},
 			}},
-			labels: map[string]string{"haro.layerx.co.jp/user-id": "abc"},
+			labels: map[string]string{"workspace.fjord.example/user-id": "abc"},
 			want:   true,
 		},
 	}
@@ -173,7 +173,7 @@ func TestDesiredNetworkPolicies(t *testing.T) {
 
 	matching := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
 		Name:   "haro-workspace-preview-abc",
-		Labels: map[string]string{"haro.layerx.co.jp/user-id": "abc"},
+		Labels: map[string]string{"workspace.fjord.example/user-id": "abc"},
 	}}
 	nonMatching := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "kube-system"}}
 
@@ -249,7 +249,7 @@ func TestCNPController_Reconcile(t *testing.T) {
 
 	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
 		Name:   "haro-workspace-preview-abc",
-		Labels: map[string]string{"haro.layerx.co.jp/user-id": "abc"},
+		Labels: map[string]string{"workspace.fjord.example/user-id": "abc"},
 	}}
 
 	client := fake.NewClientset(ns)
@@ -335,7 +335,7 @@ func TestCNPController_Run(t *testing.T) {
 
 	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
 		Name:   "haro-workspace-preview-abc",
-		Labels: map[string]string{"haro.layerx.co.jp/user-id": "abc"},
+		Labels: map[string]string{"workspace.fjord.example/user-id": "abc"},
 	}}
 
 	client := fake.NewClientset(ns)
