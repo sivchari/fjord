@@ -37,6 +37,10 @@ func newDeleteClusterCmd(logger logger.Logger) *cobra.Command {
 				return fmt.Errorf("delete cluster: %w", err)
 			}
 
+			if err := removeClusterKubeconfig(name); err != nil {
+				return fmt.Errorf("remove kubeconfig entry: %w", err)
+			}
+
 			return nil
 		},
 	}

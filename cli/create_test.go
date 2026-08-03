@@ -123,12 +123,12 @@ func TestClusterReadyMessage(t *testing.T) {
 		{
 			name: "auth enabled reports the fixed NodePort",
 			opts: &createClusterOptions{name: "fjord", enableAuth: true},
-			want: `Cluster "fjord" is ready. Set kubectl context to "fjord". fjord-agent's fake STS API is reachable at localhost:30080.`,
+			want: `Cluster "fjord" is ready. kubectl context is set to "fjord". fjord-agent's fake STS API is reachable at localhost:30080.`,
 		},
 		{
 			name: "auth disabled omits the endpoint",
 			opts: &createClusterOptions{name: "fjord", enableAuth: false},
-			want: `Cluster "fjord" is ready. Set kubectl context to "fjord".`,
+			want: `Cluster "fjord" is ready. kubectl context is set to "fjord".`,
 		},
 	}
 

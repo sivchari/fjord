@@ -11,6 +11,7 @@ import (
 	"github.com/sivchari/fjord/internal/agent"
 	"github.com/sivchari/fjord/internal/cluster"
 	"github.com/sivchari/fjord/internal/logger"
+	clusterprovider "github.com/sivchari/fjord/internal/provider"
 )
 
 const (
@@ -147,6 +148,102 @@ func loadOrNewKubeconfig(path string) (*clientcmdapi.Config, error) {
 	}
 
 	return clientcmdapi.NewConfig(), nil
+}
+
+// mergeClusterKubeconfig merges the Cluster/AuthInfo/Context provider wrote
+// for the cluster named name (see provider.KubeConfig) into the user's
+// default kubeconfig file, all keyed under name, and sets current-context to
+// name — the same shape `kind` used to leave behind on cluster creation. The
+// source AuthInfo entry is renamed to name even though rask's per-cluster
+// kubeconfig always calls it "admin" (see internal/rask/provider.go's
+// KubeConfig doc), since keeping that name would collide across multiple
+// clusters merged into the same default kubeconfig. It returns the default
+// kubeconfig's path.
+func mergeClusterKubeconfig(provider clusterprovider.Provider, name string) (path string, err error) {
+	raw, err := provider.KubeConfig(name)
+	if err != nil {
+		return "", fmt.Errorf("get kubeconfig: %w", err)
+	}
+
+	source, err := clientcmd.Load([]byte(raw))
+	if err != nil {
+		return "", fmt.Errorf("parse kubeconfig: %w", err)
+	}
+
+	sourceContext, ok := source.Contexts[name]
+	if !ok {
+		return "", fmt.Errorf("cluster kubeconfig has no context %q", name)
+	}
+
+	sourceCluster, ok := source.Clusters[sourceContext.Cluster]
+	if !ok {
+		return "", fmt.Errorf("cluster kubeconfig has no cluster %q", sourceContext.Cluster)
+	}
+
+	sourceAuthInfo, ok := source.AuthInfos[sourceContext.AuthInfo]
+	if !ok {
+		return "", fmt.Errorf("cluster kubeconfig has no authinfo %q", sourceContext.AuthInfo)
+	}
+
+	rules := clientcmd.NewDefaultClientConfigLoadingRules()
+	path = rules.GetDefaultFilename()
+
+	config, err := loadOrNewKubeconfig(path)
+	if err != nil {
+		return "", err
+	}
+
+	config.Clusters[name] = sourceCluster
+	config.AuthInfos[name] = sourceAuthInfo
+	config.Contexts[name] = &clientcmdapi.Context{Cluster: name, AuthInfo: name}
+	config.CurrentContext = name
+
+	if err := clientcmd.WriteToFile(*config, path); err != nil {
+		return "", fmt.Errorf("write kubeconfig: %w", err)
+	}
+
+	return path, nil
+}
+
+// removeClusterKubeconfig removes the Cluster/AuthInfo/Context entries
+// mergeClusterKubeconfig added for the cluster named name from the user's
+// default kubeconfig file, clearing current-context if it pointed at name.
+// It is a no-op, not an error, if the default kubeconfig file does not exist
+// or name was never merged into it.
+func removeClusterKubeconfig(name string) error {
+	rules := clientcmd.NewDefaultClientConfigLoadingRules()
+	path := rules.GetDefaultFilename()
+
+	config, err := clientcmd.LoadFromFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+
+		return fmt.Errorf("load kubeconfig %q: %w", path, err)
+	}
+
+	_, hasCluster := config.Clusters[name]
+	_, hasAuthInfo := config.AuthInfos[name]
+	_, hasContext := config.Contexts[name]
+
+	if !hasCluster && !hasAuthInfo && !hasContext {
+		return nil
+	}
+
+	delete(config.Clusters, name)
+	delete(config.AuthInfos, name)
+	delete(config.Contexts, name)
+
+	if config.CurrentContext == name {
+		config.CurrentContext = ""
+	}
+
+	if err := clientcmd.WriteToFile(*config, path); err != nil {
+		return fmt.Errorf("write kubeconfig: %w", err)
+	}
+
+	return nil
 }
 
 // execAuthInfo builds the AuthInfo entry for principal: an exec credential

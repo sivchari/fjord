@@ -105,14 +105,9 @@ func runCreateCluster(ctx context.Context, logger logger.Logger, opts *createClu
 		logger.Warn(darwinControlPlaneWarning)
 	}
 
-	eksVersion := opts.eksVersion
-	if eksVersion == "" {
-		eksVersion = latestVersion(eksd.SupportedVersions())
-	}
-
-	release, err := eksd.Resolve(eksVersion)
+	release, err := resolveEKSRelease(opts)
 	if err != nil {
-		return fmt.Errorf("resolve eks version: %w", err)
+		return err
 	}
 
 	config, ca, err := buildClusterConfig(opts, release, goos)
@@ -136,6 +131,10 @@ func runCreateCluster(ctx context.Context, logger logger.Logger, opts *createClu
 		return fmt.Errorf("create cluster: %w", err)
 	}
 
+	if err := mergeReadyKubeconfig(logger, provider, opts.name); err != nil {
+		return err
+	}
+
 	client, err := clusterClient(provider, opts.name)
 	if err != nil {
 		return err
@@ -154,6 +153,22 @@ func runCreateCluster(ctx context.Context, logger logger.Logger, opts *createClu
 	logger.V(0).Info(clusterReadyMessage(opts))
 
 	return nil
+}
+
+// resolveEKSRelease resolves the EKS Distro release opts asks for, defaulting
+// to the latest supported EKS version when --eks-version is unset.
+func resolveEKSRelease(opts *createClusterOptions) (*eksd.Release, error) {
+	eksVersion := opts.eksVersion
+	if eksVersion == "" {
+		eksVersion = latestVersion(eksd.SupportedVersions())
+	}
+
+	release, err := eksd.Resolve(eksVersion)
+	if err != nil {
+		return nil, fmt.Errorf("resolve eks version: %w", err)
+	}
+
+	return release, nil
 }
 
 // buildCreateOptions builds the clusterprovider.CreateOptions for opts,
@@ -184,10 +199,11 @@ func buildCreateOptions(ctx context.Context, logger logger.Logger, opts *createC
 }
 
 // clusterReadyMessage builds the final "cluster is ready" message for opts,
-// naming the kubectl context to use and, when auth is enabled, the endpoint
+// naming the kubectl context runCreateCluster already merged and switched to
+// (see mergeClusterKubeconfig) and, when auth is enabled, the endpoint
 // fjord-agent's fake STS API is reachable at.
 func clusterReadyMessage(opts *createClusterOptions) string {
-	message := fmt.Sprintf("Cluster %q is ready. Set kubectl context to %q.", opts.name, opts.name)
+	message := fmt.Sprintf("Cluster %q is ready. kubectl context is set to %q.", opts.name, opts.name)
 
 	if opts.enableAuth {
 		message += fmt.Sprintf(" fjord-agent's fake STS API is reachable at localhost:%d.", cluster.AgentNodePort)
@@ -338,6 +354,21 @@ func authnStagingDir(name string) (string, error) {
 	}
 
 	return filepath.Join(cacheDir, "fjord", "authn", name), nil
+}
+
+// mergeReadyKubeconfig merges name's kubeconfig into the user's default
+// kubeconfig (see mergeClusterKubeconfig) once the cluster is up, so
+// kubectl can reach it under context name without any further setup, and
+// logs where it was written.
+func mergeReadyKubeconfig(logger logger.Logger, provider clusterprovider.Provider, name string) error {
+	path, err := mergeClusterKubeconfig(provider, name)
+	if err != nil {
+		return fmt.Errorf("merge kubeconfig: %w", err)
+	}
+
+	logger.V(0).Infof("Merged kubeconfig for cluster %q into %s", name, path)
+
+	return nil
 }
 
 // clusterClient builds a Kubernetes client for the cluster named name via
