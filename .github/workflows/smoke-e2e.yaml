@@ -23,4 +23,6 @@ jobs:
           key: eksd-tarball-${{ hashFiles('internal/eksd/generated_table.go') }}
 
       - name: Run integration tests
-        run: make test-integration
+        # sudo: rask's hostproc substrate supervises the control plane as
+        # host processes owning host networking, which requires root.
+        run: sudo -E env "PATH=$PATH" make test-integration

@@ -12,9 +12,11 @@ builds:
     binary: fjord
     env:
       - CGO_ENABLED=0
+    # linux only: the rask dependency binds Virtualization.framework via cgo
+    # on darwin (Apple silicon only), which cannot be cross-compiled from the
+    # linux release runner. macOS users: go install (cgo builds locally).
     goos:
       - linux
-      - darwin
     goarch:
       - amd64
       - arm64
