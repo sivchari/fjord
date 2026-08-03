@@ -3,7 +3,7 @@ module github.com/sivchari/fjord
 go 1.26.3
 
 require (
-	github.com/sivchari/rask v0.0.0-20260803025011-1922106c9161
+	github.com/sivchari/rask v0.0.0-20260803030332-99a3854dacfd
 	github.com/spf13/cobra v1.10.2
 	k8s.io/api v0.36.0
 	k8s.io/apiextensions-apiserver v0.36.0
