@@ -20,6 +20,7 @@ What you get out of the box, matching a new EKS cluster (Linux):
 - CoreDNS from the EKS Distro build for the selected EKS version
 - `gp2` (default) and `gp3` StorageClasses (backed locally by rask's bundled local-path provisioner) so EKS PVCs bind unchanged
 - IAM integration: IRSA, EKS Pod Identity, IMDS, and access-entry authentication (see below)
+- NetworkPolicy objects are actually enforced (via bundled [kube-network-policies](https://github.com/kubernetes-sigs/kube-network-policies)), matching an EKS cluster with the VPC CNI's network policy support enabled
 - Supported EKS versions 1.29 through 1.36, resolved from a release table that CI keeps in sync with new EKS Distro patch releases
 
 ## Usage
