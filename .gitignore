@@ -4,3 +4,4 @@ coverage.html
 dist/
 plan-*.md
 research-*.md
+.DS_Store
