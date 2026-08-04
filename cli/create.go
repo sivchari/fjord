@@ -110,7 +110,7 @@ func runCreateCluster(ctx context.Context, logger logger.Logger, opts *createClu
 		return err
 	}
 
-	config, ca, err := buildClusterConfig(opts, release, goos)
+	config, ca, authenticatorCert, err := buildClusterConfig(opts, release, goos)
 	if err != nil {
 		return err
 	}
@@ -145,7 +145,7 @@ func runCreateCluster(ctx context.Context, logger logger.Logger, opts *createClu
 	}
 
 	if opts.enableAuth {
-		if err := deployAgent(ctx, logger, provider, client, opts, ca, release.EKSVersion); err != nil {
+		if err := deployAgent(ctx, logger, provider, client, opts, ca, authenticatorCert, release.EKSVersion); err != nil {
 			return err
 		}
 	}
@@ -206,7 +206,7 @@ func clusterReadyMessage(opts *createClusterOptions) string {
 	message := fmt.Sprintf("Cluster %q is ready. kubectl context is set to %q.", opts.name, opts.name)
 
 	if opts.enableAuth {
-		message += fmt.Sprintf(" fjord-agent's fake STS API is reachable at localhost:%d.", cluster.AgentNodePort)
+		message += fmt.Sprintf(" fjord-agent's fake STS API is reachable at %s:%d.", cluster.AgentLoopbackHost, cluster.AgentNodePort)
 	}
 
 	return message
@@ -276,18 +276,22 @@ func applyEKSDefaultState(ctx context.Context, logger logger.Logger, provider cl
 
 // buildClusterConfig builds the clusterprovider.Config for opts and release.
 // When auth is enabled it also generates the fjord CA and stages the
-// authenticator's static pod manifest, webhook kubeconfig, and TLS
-// certificate (see stageAuthenticator), wiring the result into the returned
+// authenticator's webhook kubeconfig and TLS certificate (see
+// stageAuthenticator), wiring the webhook kubeconfig into the returned
 // Config's ExtraMounts and AuthWebhook: both must exist before the cluster
 // is created, since rask delivers them into the control-plane node as part
 // of cluster creation itself, before the API server ever starts. The
-// returned CA is nil when auth is disabled; otherwise it is reused later for
-// IRSA/pod-identity-webhook's serving certificates, so the webhook
-// kubeconfig's trust and every fjord-issued certificate share one root. On
-// darwin, the CoreDNS image override is skipped: rask's vz substrate does
+// returned CA and authenticator certificate are nil when auth is disabled;
+// otherwise the CA is reused later for IRSA/pod-identity-webhook's serving
+// certificates, so the webhook kubeconfig's trust and every fjord-issued
+// certificate share one root, and the authenticator certificate is reused by
+// deployAgent/deployAuthenticator to populate the Secret
+// cluster.EnsureAuthenticator's DaemonSet mounts, so the pod serves the same
+// certificate the webhook kubeconfig's SANs and trust were computed against.
+// On darwin, the CoreDNS image override is skipped: rask's vz substrate does
 // not yet support it (see buildCreateOptions's ComponentDir gating for the
 // same reason).
-func buildClusterConfig(opts *createClusterOptions, release *eksd.Release, goos string) (*clusterprovider.Config, *pki.CA, error) {
+func buildClusterConfig(opts *createClusterOptions, release *eksd.Release, goos string) (*clusterprovider.Config, *pki.CA, *pki.ServerCert, error) {
 	config := &clusterprovider.Config{
 		Name:        opts.name,
 		KubeVersion: release.KubeVersion,
@@ -301,30 +305,29 @@ func buildClusterConfig(opts *createClusterOptions, release *eksd.Release, goos 
 	}
 
 	if !opts.enableAuth {
-		return config, nil, nil
+		return config, nil, nil, nil
 	}
 
 	ca, err := pki.NewCA("fjord")
 	if err != nil {
-		return nil, nil, fmt.Errorf("generate fjord CA: %w", err)
+		return nil, nil, nil, fmt.Errorf("generate fjord CA: %w", err)
 	}
 
 	staged, err := stageAuthenticator(opts, ca)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	config.ExtraMounts = staged.Mounts
 	config.AuthWebhook = staged.Webhook
 
-	return config, ca, nil
+	return config, ca, staged.Cert, nil
 }
 
-// stageAuthenticator resolves the fjord-agent image opts requests and
-// stages the authenticator's static pod manifest, webhook kubeconfig, and
-// TLS certificate (issued from ca) for it under a per-cluster host
-// directory (see authnStagingDir), clearing any stale staging left by a
-// previous cluster of the same name first.
+// stageAuthenticator stages the authenticator's webhook kubeconfig under a
+// per-cluster host directory (see authnStagingDir) and issues its TLS
+// certificate from ca, clearing any stale staging left by a previous cluster
+// of the same name first.
 func stageAuthenticator(opts *createClusterOptions, ca *pki.CA) (*authn.StagedAuthn, error) {
 	dir, err := authnStagingDir(opts.name)
 	if err != nil {
@@ -410,11 +413,14 @@ func clusterDynamicClient(provider clusterprovider.Provider, name string) (dynam
 
 // deployAgent builds (if requested) and deploys fjord-agent to the cluster,
 // giving it EKS-compatible AWS authentication. ca is the CA the
-// authenticator's static pod manifest was already staged to trust (see
+// authenticator's webhook kubeconfig was already staged to trust (see
 // stageAuthenticator); it is reused here for IRSA/pod-identity-webhook's
-// serving certificates. eksVersion is registered in the EKS API facade's
+// serving certificates. authenticatorCert is the authenticator's own TLS
+// certificate, issued from ca by the same staging call; deployAuthenticator
+// passes it through to cluster.EnsureAuthenticator to populate the Secret
+// its DaemonSet mounts. eksVersion is registered in the EKS API facade's
 // ClusterInfo store so DescribeCluster/ListClusters can report it.
-func deployAgent(ctx context.Context, logger logger.Logger, provider clusterprovider.Provider, client kubernetes.Interface, opts *createClusterOptions, ca *pki.CA, eksVersion string) error {
+func deployAgent(ctx context.Context, logger logger.Logger, provider clusterprovider.Provider, client kubernetes.Interface, opts *createClusterOptions, ca *pki.CA, authenticatorCert *pki.ServerCert, eksVersion string) error {
 	image := opts.agentImage
 	if image == "" {
 		image = defaultAgentImage()
@@ -448,7 +454,7 @@ func deployAgent(ctx context.Context, logger logger.Logger, provider clusterprov
 		return fmt.Errorf("ensure agent: %w", err)
 	}
 
-	if err := deployAuthenticator(ctx, logger, provider, client, image, opts.name, eksVersion); err != nil {
+	if err := deployAuthenticator(ctx, logger, provider, client, image, opts.name, eksVersion, authenticatorCert); err != nil {
 		return err
 	}
 
@@ -495,15 +501,17 @@ func resolveAWSEndpointURL(opts *createClusterOptions) string {
 }
 
 // deployAuthenticator sets up fjord's authentication token webhook: its RBAC,
-// the DaemonSet that serves it, and the cluster-info the EKS API facade needs.
-func deployAuthenticator(ctx context.Context, logger logger.Logger, provider clusterprovider.Provider, client kubernetes.Interface, image, name, eksVersion string) error {
+// the DaemonSet that serves it (its Secret populated from cert, the
+// authenticator's TLS certificate staged by stageAuthenticator), and the
+// cluster-info the EKS API facade needs.
+func deployAuthenticator(ctx context.Context, logger logger.Logger, provider clusterprovider.Provider, client kubernetes.Interface, image, name, eksVersion string, cert *pki.ServerCert) error {
 	logger.V(0).Info("Deploying the authentication token webhook (fjord-authenticator) ...")
 
 	if err := cluster.EnsureAuthenticatorRBAC(ctx, client); err != nil {
 		return fmt.Errorf("ensure authenticator rbac: %w", err)
 	}
 
-	if err := cluster.EnsureAuthenticator(ctx, client, image); err != nil {
+	if err := cluster.EnsureAuthenticator(ctx, client, image, cert); err != nil {
 		return fmt.Errorf("ensure authenticator: %w", err)
 	}
 

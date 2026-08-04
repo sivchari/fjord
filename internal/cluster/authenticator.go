@@ -13,6 +13,7 @@ import (
 	"k8s.io/client-go/util/retry"
 
 	"github.com/sivchari/fjord/internal/agent"
+	"github.com/sivchari/fjord/internal/pki"
 )
 
 const (
@@ -20,13 +21,17 @@ const (
 	// TokenReview webhook on, matching the server URL in the webhook
 	// kubeconfig internal/authn.Stage writes.
 	authenticatorPort = 9443
-	// authenticatorAuthnDir is the node directory internal/authn.Stage's
-	// mount delivers the authenticator's TLS material to.
-	authenticatorAuthnDir = "/etc/fjord/authn"
-	// controlPlaneNodeLabel selects the control-plane node the authenticator
-	// must run on, so its hostNetwork listener shares the API server's
-	// network namespace and the webhook's "localhost" server reaches it.
-	controlPlaneNodeLabel = "node-role.kubernetes.io/control-plane"
+
+	// AuthenticatorTLSCertName is the Secret fjord-authenticator's serving
+	// certificate is stored in and mounted from. EnsureAuthenticator
+	// populates its content from the cert callers pass it (issued by
+	// internal/authn.Stage, the same certificate the webhook kubeconfig's
+	// trust anchors and SANs were computed against).
+	AuthenticatorTLSCertName = "fjord-authenticator-tls"
+
+	// authenticatorTLSMountPath is the path fjord-authenticator's TLS
+	// certificate and key are mounted at inside its container.
+	authenticatorTLSMountPath = "/etc/fjord/authn"
 )
 
 // authenticatorLabels selects fjord-authenticator's pods.
@@ -41,8 +46,16 @@ var authenticatorLabels = map[string]string{"app": AuthenticatorServiceAccountNa
 // Authorizer requires to issue its projected token, so kubelet injects the
 // ServiceAccount token automatically. It reuses fjord-authenticator's
 // ServiceAccount (see EnsureAuthenticatorRBAC), so callers must invoke that
-// first. It is idempotent.
-func EnsureAuthenticator(ctx context.Context, client kubernetes.Interface, image string) error {
+// first. cert is the authenticator's TLS serving certificate (see
+// internal/authn.Stage), stored in AuthenticatorTLSCertName and mounted by
+// the DaemonSet; a rask node has no directory rask itself delivers files
+// into (unlike kind's node container), so the certificate travels through
+// the cluster as a Secret rather than a hostPath. It is idempotent.
+func EnsureAuthenticator(ctx context.Context, client kubernetes.Interface, image string, cert *pki.ServerCert) error {
+	if err := ensureTLSSecret(ctx, client, AuthenticatorTLSCertName, cert); err != nil {
+		return err
+	}
+
 	return ensureAuthenticatorDaemonSet(ctx, client, authenticatorDaemonSet(image))
 }
 
@@ -89,9 +102,17 @@ func authenticatorDaemonSet(image string) *appsv1.DaemonSet {
 				ObjectMeta: metav1.ObjectMeta{Labels: authenticatorLabels},
 				Spec: corev1.PodSpec{
 					ServiceAccountName: AuthenticatorServiceAccountName,
-					HostNetwork:        true,
-					DNSPolicy:          corev1.DNSClusterFirstWithHostNet,
-					NodeSelector:       map[string]string{controlPlaneNodeLabel: ""},
+					// hostNetwork with no nodeSelector: rask runs a single node
+					// whose kubelet, API server and kube-proxy are host
+					// processes sharing one network namespace, so scheduling
+					// anywhere already puts the listener where the webhook's
+					// "localhost" server URL resolves. Selecting
+					// node-role.kubernetes.io/control-plane (which kind's
+					// control-plane node carried) leaves the DaemonSet with no
+					// eligible node here, so nothing serves the webhook and
+					// every token review fails with "connection refused".
+					HostNetwork: true,
+					DNSPolicy:   corev1.DNSClusterFirstWithHostNet,
 					Tolerations: []corev1.Toleration{
 						{Operator: corev1.TolerationOpExists},
 					},
@@ -102,19 +123,19 @@ func authenticatorDaemonSet(image string) *appsv1.DaemonSet {
 							Args: []string{
 								"serve", "authenticator",
 								"--port", fmt.Sprintf("%d", authenticatorPort),
-								"--tls-cert-file", authenticatorAuthnDir + "/tls.crt",
-								"--tls-key-file", authenticatorAuthnDir + "/tls.key",
+								"--tls-cert-file", authenticatorTLSMountPath + "/tls.crt",
+								"--tls-key-file", authenticatorTLSMountPath + "/tls.key",
 							},
 							VolumeMounts: []corev1.VolumeMount{
-								{Name: "authn", MountPath: authenticatorAuthnDir, ReadOnly: true},
+								{Name: "tls", MountPath: authenticatorTLSMountPath, ReadOnly: true},
 							},
 						},
 					},
 					Volumes: []corev1.Volume{
 						{
-							Name: "authn",
+							Name: "tls",
 							VolumeSource: corev1.VolumeSource{
-								HostPath: &corev1.HostPathVolumeSource{Path: authenticatorAuthnDir},
+								Secret: &corev1.SecretVolumeSource{SecretName: AuthenticatorTLSCertName},
 							},
 						},
 					},

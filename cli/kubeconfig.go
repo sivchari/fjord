@@ -256,7 +256,7 @@ func execAuthInfo(opts *updateKubeconfigOptions, principal *agent.Principal) *cl
 			Command:    "aws",
 			Args:       []string{"--region", execAWSRegion, "eks", "get-token", "--cluster-name", opts.clusterName},
 			Env: []clientcmdapi.ExecEnvVar{
-				{Name: "AWS_ENDPOINT_URL_STS", Value: fmt.Sprintf("http://localhost:%d", cluster.AgentNodePort)},
+				{Name: "AWS_ENDPOINT_URL_STS", Value: fmt.Sprintf("http://%s:%d", cluster.AgentLoopbackHost, cluster.AgentNodePort)},
 				{Name: "AWS_ACCESS_KEY_ID", Value: principal.AccessKeyID},
 				{Name: "AWS_SECRET_ACCESS_KEY", Value: execAWSSignValue},
 			},

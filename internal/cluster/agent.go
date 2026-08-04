@@ -33,6 +33,14 @@ const (
 	// port is reachable directly on the host without any port mapping.
 	AgentNodePort = 30080
 
+	// AgentLoopbackHost is the loopback address callers on the host use to
+	// reach fjord-agent through AgentNodePort. It spells out 127.0.0.1 rather
+	// than "localhost" on purpose: kube-proxy publishes NodePorts through
+	// IPv4 rules only, while a container's /etc/hosts usually maps
+	// "localhost" to ::1 as well and Go's resolver may return that first,
+	// which fails with "connection refused" even though the port is open.
+	AgentLoopbackHost = "127.0.0.1"
+
 	// AgentTLSCertName is the Secret fjord-agent's IRSA injector webhook
 	// TLS certificate is stored in and mounted from, when EnsureAgent is
 	// called with enableIRSA true. EnsureIRSA populates its content.
