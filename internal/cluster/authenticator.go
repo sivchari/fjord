@@ -38,7 +38,7 @@ const (
 var authenticatorLabels = map[string]string{"app": AuthenticatorServiceAccountName}
 
 // EnsureAuthenticator deploys fjord-authenticator as a hostNetwork DaemonSet
-// pinned to the control-plane node, running image as `serve authenticator`.
+// running image as `serve authenticator`.
 // It runs hostNetwork so the API server (itself a hostNetwork static pod)
 // reaches its TLS listener at localhost:9443, the address the webhook
 // kubeconfig internal/authn.Stage staged points at. Unlike a static pod, a
