@@ -4,20 +4,24 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"reflect"
+	"strings"
 	"sync"
 
 	corev1 "k8s.io/api/core/v1"
+	discoveryv1 "k8s.io/api/discovery/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/dynamic/dynamicinformer"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	corelisters "k8s.io/client-go/listers/core/v1"
+	discoverylisters "k8s.io/client-go/listers/discovery/v1"
 	"k8s.io/client-go/tools/cache"
-	"k8s.io/client-go/util/retry"
 	"k8s.io/client-go/util/workqueue"
 )
 
@@ -28,19 +32,20 @@ const targetGroupBindingWorkers = 2
 // TargetGroupBindingController emulates the AWS Load Balancer Controller's
 // TargetGroupBinding (elbv2.k8s.aws/v1beta1) CRD locally: fjord has no ALB
 // to register pod/node targets with, so for every TargetGroupBinding it
-// instead mirrors the Service it references as a type: LoadBalancer
-// Service (see buildMirrorService), reproducing a TargetGroupBinding's real
-// meaning -- "this Service is the externally reachable backend" -- without
-// mutating the referenced Service, which another controller may already
-// own and reconcile.
+// instead resolves the targets a real ALB would register -- pod IPs for
+// targetType ip, node address + nodePort for targetType instance (see
+// resolveTargets) -- from the Service it references, and reports them in
+// the TargetGroupBinding's own status (see updateStatus), rather than
+// mutating the referenced Service or creating one of its own.
 //
 // It watches TargetGroupBinding (via a dynamic informer, since fjord has no
-// generated client for it) and Service (so serviceRef changes -- port
-// renumbering, selector changes -- are picked up too), reconciling affected
-// TargetGroupBindings through a rate-limited work queue. Call Run to start
-// it; Run blocks until ctx is done, so callers should run it in its own
-// goroutine and wait for Run to return before considering shutdown
-// complete.
+// generated client for it), Service, EndpointSlice, and Node, so any change
+// that could affect a TargetGroupBinding's resolved targets -- a
+// serviceRef change, a pod becoming ready/unready, a node's address
+// changing -- is picked up, reconciling affected TargetGroupBindings
+// through a rate-limited work queue. Call Run to start it; Run blocks until
+// ctx is done, so callers should run it in its own goroutine and wait for
+// Run to return before considering shutdown complete.
 type TargetGroupBindingController struct {
 	client        kubernetes.Interface
 	dynamicClient dynamic.Interface
@@ -48,8 +53,9 @@ type TargetGroupBindingController struct {
 }
 
 // NewTargetGroupBindingController returns a TargetGroupBindingController
-// using client to manage mirror Services and dynamicClient to watch
-// TargetGroupBinding objects. A nil logger defaults to slog.Default().
+// using client to list Services/EndpointSlices/Nodes and dynamicClient to
+// watch and update TargetGroupBinding objects. A nil logger defaults to
+// slog.Default().
 func NewTargetGroupBindingController(client kubernetes.Interface, dynamicClient dynamic.Interface, logger *slog.Logger) *TargetGroupBindingController {
 	if logger == nil {
 		logger = slog.Default()
@@ -58,39 +64,35 @@ func NewTargetGroupBindingController(client kubernetes.Interface, dynamicClient 
 	return &TargetGroupBindingController{client: client, dynamicClient: dynamicClient, logger: logger}
 }
 
-// Run starts TargetGroupBindingController's informers and
-// targetGroupBindingWorkers reconcile goroutines, and blocks until ctx is
-// done. It then waits for every in-flight reconcile to finish before
-// returning, so it never leaks a goroutine past Run returning.
+// Run garbage-collects any leftover mirror Service from an earlier fjord
+// version (see garbageCollectLegacyMirrorServices), then starts
+// TargetGroupBindingController's informers and targetGroupBindingWorkers
+// reconcile goroutines, and blocks until ctx is done. It then waits for
+// every in-flight reconcile to finish before returning, so it never leaks a
+// goroutine past Run returning.
 func (c *TargetGroupBindingController) Run(ctx context.Context) error {
+	if err := c.garbageCollectLegacyMirrorServices(ctx); err != nil {
+		return fmt.Errorf("garbage collect legacy mirror services: %w", err)
+	}
+
 	dynamicFactory := dynamicinformer.NewDynamicSharedInformerFactory(c.dynamicClient, 0)
 	tgbInformer := dynamicFactory.ForResource(TargetGroupBindingGVR).Informer()
 
 	coreFactory := informers.NewSharedInformerFactory(c.client, 0)
 	services := coreFactory.Core().V1().Services()
+	endpointSlices := coreFactory.Discovery().V1().EndpointSlices()
+	nodes := coreFactory.Core().V1().Nodes()
 
 	queue := workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]())
 
-	if _, err := tgbInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
-		AddFunc:    func(obj any) { enqueueKey(queue, obj) },
-		UpdateFunc: func(_, obj any) { enqueueKey(queue, obj) },
-		DeleteFunc: func(obj any) { enqueueKey(queue, obj) },
-	}); err != nil {
-		return fmt.Errorf("add target group binding informer event handler: %w", err)
-	}
-
-	if _, err := services.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
-		AddFunc:    func(obj any) { c.enqueueTargetGroupBindingsForService(queue, tgbInformer.GetIndexer(), obj) },
-		UpdateFunc: func(_, obj any) { c.enqueueTargetGroupBindingsForService(queue, tgbInformer.GetIndexer(), obj) },
-		DeleteFunc: func(obj any) { c.enqueueTargetGroupBindingsForService(queue, tgbInformer.GetIndexer(), obj) },
-	}); err != nil {
-		return fmt.Errorf("add service informer event handler: %w", err)
+	if err := c.addEventHandlers(queue, tgbInformer, services.Informer(), endpointSlices.Informer(), nodes.Informer()); err != nil {
+		return err
 	}
 
 	dynamicFactory.Start(ctx.Done())
 	coreFactory.Start(ctx.Done())
 
-	if !cache.WaitForCacheSync(ctx.Done(), tgbInformer.HasSynced, services.Informer().HasSynced) {
+	if !cache.WaitForCacheSync(ctx.Done(), tgbInformer.HasSynced, services.Informer().HasSynced, endpointSlices.Informer().HasSynced, nodes.Informer().HasSynced) {
 		queue.ShutDown()
 
 		return fmt.Errorf("wait for informer cache sync: %w", ctx.Err())
@@ -104,13 +106,52 @@ func (c *TargetGroupBindingController) Run(ctx context.Context) error {
 		go func() {
 			defer wg.Done()
 
-			c.runWorker(ctx, queue, tgbInformer.GetIndexer(), services.Lister())
+			c.runWorker(ctx, queue, tgbInformer.GetIndexer(), services.Lister(), endpointSlices.Lister(), nodes.Lister())
 		}()
 	}
 
 	<-ctx.Done()
 	queue.ShutDown()
 	wg.Wait()
+
+	return nil
+}
+
+// addEventHandlers registers Run's four informer event handlers -- one per
+// watched type -- against queue, so Run itself stays focused on lifecycle
+// (start, sync, run workers, shut down) rather than wiring detail.
+func (c *TargetGroupBindingController) addEventHandlers(queue workqueue.TypedRateLimitingInterface[string], tgbInformer, serviceInformer, endpointSliceInformer, nodeInformer cache.SharedIndexInformer) error {
+	if _, err := tgbInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+		AddFunc:    func(obj any) { enqueueKey(queue, obj) },
+		UpdateFunc: func(_, obj any) { enqueueKey(queue, obj) },
+		DeleteFunc: func(obj any) { enqueueKey(queue, obj) },
+	}); err != nil {
+		return fmt.Errorf("add target group binding informer event handler: %w", err)
+	}
+
+	if _, err := serviceInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+		AddFunc:    func(obj any) { c.enqueueTargetGroupBindingsForService(queue, tgbInformer.GetIndexer(), obj) },
+		UpdateFunc: func(_, obj any) { c.enqueueTargetGroupBindingsForService(queue, tgbInformer.GetIndexer(), obj) },
+		DeleteFunc: func(obj any) { c.enqueueTargetGroupBindingsForService(queue, tgbInformer.GetIndexer(), obj) },
+	}); err != nil {
+		return fmt.Errorf("add service informer event handler: %w", err)
+	}
+
+	if _, err := endpointSliceInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+		AddFunc:    func(obj any) { c.enqueueTargetGroupBindingsForEndpointSlice(queue, tgbInformer.GetIndexer(), obj) },
+		UpdateFunc: func(_, obj any) { c.enqueueTargetGroupBindingsForEndpointSlice(queue, tgbInformer.GetIndexer(), obj) },
+		DeleteFunc: func(obj any) { c.enqueueTargetGroupBindingsForEndpointSlice(queue, tgbInformer.GetIndexer(), obj) },
+	}); err != nil {
+		return fmt.Errorf("add endpoint slice informer event handler: %w", err)
+	}
+
+	if _, err := nodeInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+		AddFunc:    func(any) { enqueueAllTargetGroupBindings(queue, tgbInformer.GetIndexer()) },
+		UpdateFunc: func(_, _ any) { enqueueAllTargetGroupBindings(queue, tgbInformer.GetIndexer()) },
+		DeleteFunc: func(any) { enqueueAllTargetGroupBindings(queue, tgbInformer.GetIndexer()) },
+	}); err != nil {
+		return fmt.Errorf("add node informer event handler: %w", err)
+	}
 
 	return nil
 }
@@ -129,19 +170,48 @@ func enqueueKey(queue workqueue.TypedRateLimitingInterface[string], obj any) {
 }
 
 // enqueueTargetGroupBindingsForService enqueues every TargetGroupBinding in
-// tgbIndexer, in the same namespace as the Service carried by obj, whose
-// spec.serviceRef.name names that Service -- so a Service's own changes
-// (selector, ports) re-trigger reconciliation of every TargetGroupBinding
-// referencing it, not just the TargetGroupBinding's own changes.
+// tgbIndexer whose spec.serviceRef.name names the Service carried by obj --
+// so a Service's own changes (type, ports) re-trigger reconciliation of
+// every TargetGroupBinding referencing it, not just the TargetGroupBinding's
+// own changes.
 func (c *TargetGroupBindingController) enqueueTargetGroupBindingsForService(queue workqueue.TypedRateLimitingInterface[string], tgbIndexer cache.Indexer, obj any) {
 	svc := coerceService(obj)
 	if svc == nil {
 		return
 	}
 
+	c.enqueueTargetGroupBindingsForServiceName(queue, tgbIndexer, svc.Namespace, svc.Name)
+}
+
+// enqueueTargetGroupBindingsForEndpointSlice enqueues every
+// TargetGroupBinding in tgbIndexer whose spec.serviceRef.name matches the
+// discoveryv1.LabelServiceName label on the EndpointSlice carried by obj --
+// so a pod becoming ready/unready, or any other EndpointSlice change,
+// re-triggers reconciliation of every TargetGroupBinding whose ip-typed
+// targets it backs.
+func (c *TargetGroupBindingController) enqueueTargetGroupBindingsForEndpointSlice(queue workqueue.TypedRateLimitingInterface[string], tgbIndexer cache.Indexer, obj any) {
+	slice := coerceEndpointSlice(obj)
+	if slice == nil {
+		return
+	}
+
+	serviceName := slice.Labels[discoveryv1.LabelServiceName]
+	if serviceName == "" {
+		return
+	}
+
+	c.enqueueTargetGroupBindingsForServiceName(queue, tgbIndexer, slice.Namespace, serviceName)
+}
+
+// enqueueTargetGroupBindingsForServiceName enqueues every TargetGroupBinding
+// in tgbIndexer, in namespace, whose spec.serviceRef.name equals
+// serviceName. It backs both enqueueTargetGroupBindingsForService and
+// enqueueTargetGroupBindingsForEndpointSlice, which each derive namespace
+// and serviceName from a different watched object.
+func (c *TargetGroupBindingController) enqueueTargetGroupBindingsForServiceName(queue workqueue.TypedRateLimitingInterface[string], tgbIndexer cache.Indexer, namespace, serviceName string) {
 	for _, item := range tgbIndexer.List() {
 		u, ok := item.(*unstructured.Unstructured)
-		if !ok || u.GetNamespace() != svc.Namespace {
+		if !ok || u.GetNamespace() != namespace {
 			continue
 		}
 
@@ -152,7 +222,28 @@ func (c *TargetGroupBindingController) enqueueTargetGroupBindingsForService(queu
 			continue
 		}
 
-		if tgb.Spec.ServiceRef.Name != svc.Name {
+		if tgb.Spec.ServiceRef.Name != serviceName {
+			continue
+		}
+
+		if key, err := cache.MetaNamespaceKeyFunc(u); err == nil {
+			queue.Add(key)
+		}
+	}
+}
+
+// enqueueAllTargetGroupBindings enqueues every TargetGroupBinding currently
+// in tgbIndexer. A Node's addition, removal, or address change affects
+// every instance-typed TargetGroupBinding's targets cluster-wide, with no
+// per-Node correlation key to filter by -- unlike a Service or
+// EndpointSlice change, which only affects the TargetGroupBindings that
+// reference it -- so the Node event handlers reconcile everything rather
+// than trying to narrow the set. ip-typed TargetGroupBindings pay a
+// harmless extra reconcile that resolves to the same targets.
+func enqueueAllTargetGroupBindings(queue workqueue.TypedRateLimitingInterface[string], tgbIndexer cache.Indexer) {
+	for _, item := range tgbIndexer.List() {
+		u, ok := item.(*unstructured.Unstructured)
+		if !ok {
 			continue
 		}
 
@@ -181,16 +272,34 @@ func coerceService(obj any) *corev1.Service {
 	return svc
 }
 
+// coerceEndpointSlice extracts a *discoveryv1.EndpointSlice from obj,
+// unwrapping a cache.DeletedFinalStateUnknown tombstone the same way
+// coerceService does for Service. It returns nil for any other shape.
+func coerceEndpointSlice(obj any) *discoveryv1.EndpointSlice {
+	if slice, ok := obj.(*discoveryv1.EndpointSlice); ok {
+		return slice
+	}
+
+	tombstone, ok := obj.(cache.DeletedFinalStateUnknown)
+	if !ok {
+		return nil
+	}
+
+	slice, _ := tombstone.Obj.(*discoveryv1.EndpointSlice)
+
+	return slice
+}
+
 // runWorker pulls keys off queue and reconciles them until queue is shut
 // down (by Run, once ctx is done).
-func (c *TargetGroupBindingController) runWorker(ctx context.Context, queue workqueue.TypedRateLimitingInterface[string], tgbIndexer cache.Indexer, serviceLister corelisters.ServiceLister) {
+func (c *TargetGroupBindingController) runWorker(ctx context.Context, queue workqueue.TypedRateLimitingInterface[string], tgbIndexer cache.Indexer, serviceLister corelisters.ServiceLister, endpointSliceLister discoverylisters.EndpointSliceLister, nodeLister corelisters.NodeLister) {
 	for {
 		key, shutdown := queue.Get()
 		if shutdown {
 			return
 		}
 
-		if err := c.reconcile(ctx, key, tgbIndexer, serviceLister); err != nil {
+		if err := c.reconcile(ctx, key, tgbIndexer, serviceLister, endpointSliceLister, nodeLister); err != nil {
 			c.logger.Warn("reconcile target group binding", "key", key, "error", err)
 			queue.AddRateLimited(key)
 		} else {
@@ -201,11 +310,13 @@ func (c *TargetGroupBindingController) runWorker(ctx context.Context, queue work
 	}
 }
 
-// reconcile brings the mirror Service for the TargetGroupBinding named by
-// key in line with its current spec and referenced Service, or deletes the
-// mirror if the TargetGroupBinding no longer exists.
-func (c *TargetGroupBindingController) reconcile(ctx context.Context, key string, tgbIndexer cache.Indexer, serviceLister corelisters.ServiceLister) error {
-	namespace, name, err := cache.SplitMetaNamespaceKey(key)
+// reconcile resolves the targets for the TargetGroupBinding named by key
+// and writes them to its status (see resolveTargets and updateStatus). A
+// TargetGroupBinding that no longer exists needs no cleanup: fjord no
+// longer creates anything else on its behalf (see
+// garbageCollectLegacyMirrorServices for the one-time exception).
+func (c *TargetGroupBindingController) reconcile(ctx context.Context, key string, tgbIndexer cache.Indexer, serviceLister corelisters.ServiceLister, endpointSliceLister discoverylisters.EndpointSliceLister, nodeLister corelisters.NodeLister) error {
+	namespace, _, err := cache.SplitMetaNamespaceKey(key)
 	if err != nil {
 		return fmt.Errorf("split key %q: %w", key, err)
 	}
@@ -216,7 +327,7 @@ func (c *TargetGroupBindingController) reconcile(ctx context.Context, key string
 	}
 
 	if !exists {
-		return c.deleteMirrorService(ctx, namespace, mirrorServiceName(name))
+		return nil
 	}
 
 	u, ok := item.(*unstructured.Unstructured)
@@ -243,109 +354,63 @@ func (c *TargetGroupBindingController) reconcile(ctx context.Context, key string
 		return fmt.Errorf("get service %s/%s: %w", namespace, tgb.Spec.ServiceRef.Name, err)
 	}
 
-	desired, err := buildMirrorService(tgb, service)
+	endpointSlices, err := endpointSliceLister.EndpointSlices(namespace).List(labels.SelectorFromSet(labels.Set{discoveryv1.LabelServiceName: service.Name}))
 	if err != nil {
-		c.logger.Warn("cannot build mirror service", "targetGroupBinding", key, "service", service.Name, "error", err)
+		return fmt.Errorf("list endpoint slices for service %s/%s: %w", namespace, service.Name, err)
+	}
+
+	nodes, err := nodeLister.List(labels.Everything())
+	if err != nil {
+		return fmt.Errorf("list nodes: %w", err)
+	}
+
+	targets, targetType, err := resolveTargets(tgb, service, endpointSlices, nodes)
+	if err != nil {
+		c.logger.Warn("cannot resolve targets", "targetGroupBinding", key, "service", service.Name, "error", err)
 
 		return nil
 	}
 
-	return c.applyMirrorService(ctx, desired)
-}
-
-// applyMirrorService creates desired if no Service by that name exists yet,
-// or updates the existing one in place otherwise. It refuses to touch (and
-// returns an error for) a same-named Service fjord did not create, so a
-// name collision never clobbers an unrelated Service.
-func (c *TargetGroupBindingController) applyMirrorService(ctx context.Context, desired *corev1.Service) error {
-	existing, err := c.client.CoreV1().Services(desired.Namespace).Get(ctx, desired.Name, metav1.GetOptions{})
-	if apierrors.IsNotFound(err) {
-		if _, err := c.client.CoreV1().Services(desired.Namespace).Create(ctx, desired, metav1.CreateOptions{}); err != nil {
-			return fmt.Errorf("create mirror service %s/%s: %w", desired.Namespace, desired.Name, err)
-		}
-
-		c.logger.Warn("created mirror service; its EXTERNAL-IP stays <pending> unless metallb is deployed",
-			"service", desired.Namespace+"/"+desired.Name, "hint", "fjord create cluster --with-loadbalancer")
-
-		return nil
-	}
-
-	if err != nil {
-		return fmt.Errorf("get mirror service %s/%s: %w", desired.Namespace, desired.Name, err)
-	}
-
-	if existing.Labels[managedByLabelKey] != managedByLabelValue {
-		return fmt.Errorf("service %s/%s already exists and is not managed by fjord", desired.Namespace, desired.Name)
-	}
-
-	return c.updateMirrorService(ctx, desired)
-}
-
-// updateMirrorService updates the mirror Service named desired.Name to
-// desired's selector, ports, labels, and owner references, retrying on
-// conflicting concurrent writes. It preserves the API server's
-// auto-assigned NodePort so reconciling does not needlessly reallocate one
-// on every pass.
-func (c *TargetGroupBindingController) updateMirrorService(ctx context.Context, desired *corev1.Service) error {
-	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		current, err := c.client.CoreV1().Services(desired.Namespace).Get(ctx, desired.Name, metav1.GetOptions{})
-		if err != nil {
-			return fmt.Errorf("get mirror service %s/%s: %w", desired.Namespace, desired.Name, err)
-		}
-
-		preserveNodePort(current.Spec.Ports, desired.Spec.Ports)
-
-		current.Labels = desired.Labels
-		current.OwnerReferences = desired.OwnerReferences
-		current.Spec.Selector = desired.Spec.Selector
-		current.Spec.Ports = desired.Spec.Ports
-
-		if _, err := c.client.CoreV1().Services(desired.Namespace).Update(ctx, current, metav1.UpdateOptions{}); err != nil {
-			return fmt.Errorf("update mirror service %s/%s: %w", desired.Namespace, desired.Name, err)
-		}
-
-		return nil
-	})
-	if err != nil {
-		return fmt.Errorf("update mirror service %s/%s: %w", desired.Namespace, desired.Name, err)
+	if err := c.updateStatus(ctx, u, tgb.Generation, targets, targetType); err != nil {
+		return fmt.Errorf("update target group binding status %q: %w", key, err)
 	}
 
 	return nil
 }
 
-// preserveNodePort copies current's NodePort onto desired's matching port
-// (same port number) in place, when both hold exactly the one port
-// buildMirrorService ever builds. Leaving NodePort unset on update would
-// have the API server allocate a new one on every reconcile.
-func preserveNodePort(current, desired []corev1.ServicePort) {
-	if len(current) != 1 || len(desired) != 1 {
-		return
+// updateStatus writes observedGeneration, targets, and targetType to u's
+// status subresource via the dynamic client, skipping the write entirely
+// when the desired status already matches what decodeTargetGroupBindingStatus
+// reads back from u -- so a reconcile that resolves the same targets as
+// last time never bumps u's resourceVersion, which would otherwise
+// re-trigger the TargetGroupBinding informer's UpdateFunc and reconcile
+// forever.
+func (c *TargetGroupBindingController) updateStatus(ctx context.Context, u *unstructured.Unstructured, observedGeneration int64, targets []target, targetType string) error {
+	desired := targetGroupBindingStatus{
+		ObservedGeneration: observedGeneration,
+		Targets:            targets,
+		TargetType:         targetType,
 	}
 
-	if current[0].Port == desired[0].Port {
-		desired[0].NodePort = current[0].NodePort
-	}
-}
-
-// deleteMirrorService deletes the Service named name in namespace if it
-// exists and is managed by fjord (see managedByLabelKey), matching
-// applyMirrorService's collision guard. A missing Service is not an error.
-func (c *TargetGroupBindingController) deleteMirrorService(ctx context.Context, namespace, name string) error {
-	existing, err := c.client.CoreV1().Services(namespace).Get(ctx, name, metav1.GetOptions{})
-	if apierrors.IsNotFound(err) {
-		return nil
-	}
-
+	current, err := decodeTargetGroupBindingStatus(u)
 	if err != nil {
-		return fmt.Errorf("get mirror service %s/%s: %w", namespace, name, err)
+		return fmt.Errorf("decode current status: %w", err)
 	}
 
-	if existing.Labels[managedByLabelKey] != managedByLabelValue {
+	if reflect.DeepEqual(current, desired) {
 		return nil
 	}
 
-	if err := c.client.CoreV1().Services(namespace).Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
-		return fmt.Errorf("delete mirror service %s/%s: %w", namespace, name, err)
+	statusMap, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&desired)
+	if err != nil {
+		return fmt.Errorf("convert status to unstructured: %w", err)
+	}
+
+	updated := u.DeepCopy()
+	updated.Object["status"] = statusMap
+
+	if _, err := c.dynamicClient.Resource(TargetGroupBindingGVR).Namespace(updated.GetNamespace()).UpdateStatus(ctx, updated, metav1.UpdateOptions{}); err != nil {
+		return fmt.Errorf("update status %s/%s: %w", updated.GetNamespace(), updated.GetName(), err)
 	}
 
 	return nil
@@ -367,4 +432,80 @@ func decodeTargetGroupBinding(u *unstructured.Unstructured) (*targetGroupBinding
 	}
 
 	return &tgb, nil
+}
+
+// decodeTargetGroupBindingStatus decodes u's status subresource into
+// fjord's typed view, returning the zero value if u has no status yet (a
+// TargetGroupBinding that has never been reconciled).
+func decodeTargetGroupBindingStatus(u *unstructured.Unstructured) (targetGroupBindingStatus, error) {
+	statusMap, found, err := unstructured.NestedMap(u.Object, "status")
+	if err != nil {
+		return targetGroupBindingStatus{}, fmt.Errorf("read status: %w", err)
+	}
+
+	if !found {
+		return targetGroupBindingStatus{}, nil
+	}
+
+	var status targetGroupBindingStatus
+
+	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(statusMap, &status); err != nil {
+		return targetGroupBindingStatus{}, fmt.Errorf("convert unstructured status: %w", err)
+	}
+
+	return status, nil
+}
+
+// garbageCollectLegacyMirrorServices deletes every Service left behind by
+// an earlier fjord version's mirror-Service TargetGroupBinding emulation
+// (see this package's doc comment): a Service named "<tgb>-fjord-tgb" (see
+// legacyMirrorServiceSuffix), labeled managedByLabelKey=managedByLabelValue,
+// and owned by a TargetGroupBinding. It runs once, at Run's startup, since a
+// cluster only ever accumulates these on upgrade from a version that still
+// created them, not continuously. Deleting an already-gone Service is not
+// an error; a Service that lacks fjord's managed-by label is left alone
+// regardless of its name, so a user's own same-named, unrelated Service is
+// never touched.
+func (c *TargetGroupBindingController) garbageCollectLegacyMirrorServices(ctx context.Context) error {
+	services, err := c.client.CoreV1().Services(metav1.NamespaceAll).List(ctx, metav1.ListOptions{
+		LabelSelector: managedByLabelKey + "=" + managedByLabelValue,
+	})
+	if err != nil {
+		return fmt.Errorf("list fjord-managed services: %w", err)
+	}
+
+	for i := range services.Items {
+		svc := &services.Items[i]
+		if !isLegacyMirrorService(svc) {
+			continue
+		}
+
+		if err := c.client.CoreV1().Services(svc.Namespace).Delete(ctx, svc.Name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("delete legacy mirror service %s/%s: %w", svc.Namespace, svc.Name, err)
+		}
+
+		c.logger.Info("garbage collected legacy mirror service", "service", svc.Namespace+"/"+svc.Name)
+	}
+
+	return nil
+}
+
+// isLegacyMirrorService reports whether svc carries every trait an earlier
+// fjord version's mirror-Service emulation gave a TargetGroupBinding mirror
+// Service, beyond the managedByLabelKey=managedByLabelValue label callers
+// must already have filtered for via a label selector: the
+// legacyMirrorServiceSuffix name suffix, and a controller OwnerReference to
+// a TargetGroupBinding.
+func isLegacyMirrorService(svc *corev1.Service) bool {
+	if !strings.HasSuffix(svc.Name, legacyMirrorServiceSuffix) {
+		return false
+	}
+
+	for _, ref := range svc.OwnerReferences {
+		if ref.Kind == TargetGroupBindingKind && ref.APIVersion == TargetGroupBindingGroup+"/"+TargetGroupBindingVersion {
+			return true
+		}
+	}
+
+	return false
 }

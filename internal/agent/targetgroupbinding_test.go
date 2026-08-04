@@ -5,15 +5,14 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	discoveryv1 "k8s.io/api/discovery/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
-// haroPreviewGatewayService and haroPreviewGatewayTGB mirror the real-world
-// haro-preview-gateway TargetGroupBinding/Service pair from the task
-// description, used as TestBuildMirrorService's baseline "real manifest"
-// case.
+// haroPreviewGatewayService and haroPreviewGatewayTGB mirror a real-world
+// haro-preview-gateway TargetGroupBinding/Service pair, used as
+// TestResolveTargets' baseline "real manifest" case.
 func haroPreviewGatewayService() *corev1.Service {
 	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{Name: "haro-preview-gateway-envoy", Namespace: "haro-system"},
@@ -26,176 +25,204 @@ func haroPreviewGatewayService() *corev1.Service {
 	}
 }
 
-func haroPreviewGatewayTGB() *targetGroupBinding {
+func haroPreviewGatewayTGB(targetType string) *targetGroupBinding {
 	return &targetGroupBinding{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "haro-preview-gateway",
-			Namespace: "haro-system",
-			UID:       types.UID("11111111-1111-1111-1111-111111111111"),
+			Name:       "haro-preview-gateway",
+			Namespace:  "haro-system",
+			Generation: 3,
 		},
 		Spec: targetGroupBindingSpec{
 			ServiceRef:     serviceReference{Name: "haro-preview-gateway-envoy", Port: intstr.FromInt32(80)},
 			TargetGroupARN: "arn:aws:elasticloadbalancing:ap-northeast-1:123456789012:targetgroup/example-gateway/32df7db4c1f1d3a7",
-			TargetType:     "ip",
+			TargetType:     targetType,
 		},
 	}
 }
 
-// buildMirrorServiceTestCase is a single TestBuildMirrorService case.
-type buildMirrorServiceTestCase struct {
-	name    string
-	tgb     *targetGroupBinding
-	service *corev1.Service
-	want    *corev1.Service
-	wantErr error
-}
-
-// buildMirrorServiceTestCases returns TestBuildMirrorService's full table,
-// combining the success and error cases below (each factored into its own
-// function to keep every function short).
-func buildMirrorServiceTestCases() []buildMirrorServiceTestCase {
-	cases := buildMirrorServiceSuccessCases()
-
-	return append(cases, buildMirrorServiceErrorCases()...)
-}
-
-// buildMirrorServiceSuccessCases returns TestBuildMirrorService's cases
-// that expect a built mirror Service, each factored into its own function
-// to keep every function short.
-func buildMirrorServiceSuccessCases() []buildMirrorServiceTestCase {
-	return []buildMirrorServiceTestCase{
-		haroPreviewGatewayTestCase(),
-		namedPortTestCase(),
-		multiplePortsTestCase(),
-	}
-}
-
-// haroPreviewGatewayTestCase is TestBuildMirrorService's baseline "real
-// manifest" case (numeric port).
-func haroPreviewGatewayTestCase() buildMirrorServiceTestCase {
-	return buildMirrorServiceTestCase{
-		name:    "haro preview gateway (real manifest, numeric port)",
-		tgb:     haroPreviewGatewayTGB(),
-		service: haroPreviewGatewayService(),
-		want: &corev1.Service{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "haro-preview-gateway-fjord-tgb",
-				Namespace: "haro-system",
-				Labels:    map[string]string{"app.kubernetes.io/managed-by": "fjord"},
-				OwnerReferences: []metav1.OwnerReference{
-					{
-						APIVersion: "elbv2.k8s.aws/v1beta1",
-						Kind:       "TargetGroupBinding",
-						Name:       "haro-preview-gateway",
-						UID:        types.UID("11111111-1111-1111-1111-111111111111"),
-					},
-				},
-			},
-			Spec: corev1.ServiceSpec{
-				Type:     corev1.ServiceTypeLoadBalancer,
-				Selector: map[string]string{"app": "envoy", "gateway": "haro-preview-gateway"},
-				Ports: []corev1.ServicePort{
-					{Name: "http", Port: 80, TargetPort: intstr.FromInt32(10080), Protocol: corev1.ProtocolTCP},
-				},
-			},
+// haroPreviewGatewayEndpointSlice is haroPreviewGatewayService's
+// EndpointSlice: two Ready pods and one not-Ready pod, exercising
+// TestResolveTargets' "only Ready endpoints" assertion.
+func haroPreviewGatewayEndpointSlice() *discoveryv1.EndpointSlice {
+	return &discoveryv1.EndpointSlice{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "haro-preview-gateway-envoy-abcde",
+			Namespace: "haro-system",
+			Labels:    map[string]string{discoveryv1.LabelServiceName: "haro-preview-gateway-envoy"},
+		},
+		AddressType: discoveryv1.AddressTypeIPv4,
+		Ports: []discoveryv1.EndpointPort{
+			{Name: ptr("http"), Port: ptr(int32(10080)), Protocol: ptr(corev1.ProtocolTCP)},
+		},
+		Endpoints: []discoveryv1.Endpoint{
+			{Addresses: []string{"10.244.0.6"}, Conditions: discoveryv1.EndpointConditions{Ready: ptr(true)}},
+			{Addresses: []string{"10.244.0.5"}, Conditions: discoveryv1.EndpointConditions{Ready: ptr(true)}},
+			{Addresses: []string{"10.244.0.9"}, Conditions: discoveryv1.EndpointConditions{Ready: ptr(false)}},
 		},
 	}
 }
 
-// namedPortTestCase verifies serviceRef.port resolves by name, picking the
-// referenced Service's matching port out of several.
-func namedPortTestCase() buildMirrorServiceTestCase {
-	return buildMirrorServiceTestCase{
-		name: "named port",
-		tgb: &targetGroupBinding{
-			ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "default"},
-			Spec: targetGroupBindingSpec{
-				ServiceRef: serviceReference{Name: "web", Port: intstr.FromString("https")},
-			},
-		},
-		service: &corev1.Service{
-			ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "default"},
-			Spec: corev1.ServiceSpec{
-				Selector: map[string]string{"app": "web"},
-				Ports: []corev1.ServicePort{
-					{Name: "http", Port: 80, TargetPort: intstr.FromInt32(8080), Protocol: corev1.ProtocolTCP},
-					{Name: "https", Port: 443, TargetPort: intstr.FromInt32(8443), Protocol: corev1.ProtocolTCP},
-				},
-			},
-		},
-		want: &corev1.Service{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "web-fjord-tgb",
-				Namespace: "default",
-				Labels:    map[string]string{"app.kubernetes.io/managed-by": "fjord"},
-				OwnerReferences: []metav1.OwnerReference{
-					{APIVersion: "elbv2.k8s.aws/v1beta1", Kind: "TargetGroupBinding", Name: "web"},
-				},
-			},
-			Spec: corev1.ServiceSpec{
-				Type:     corev1.ServiceTypeLoadBalancer,
-				Selector: map[string]string{"app": "web"},
-				Ports: []corev1.ServicePort{
-					{Name: "https", Port: 443, TargetPort: intstr.FromInt32(8443), Protocol: corev1.ProtocolTCP},
-				},
-			},
-		},
-	}
+// resolveTargetsTestCase is a single TestResolveTargets case.
+type resolveTargetsTestCase struct {
+	name           string
+	tgb            *targetGroupBinding
+	service        *corev1.Service
+	endpointSlices []*discoveryv1.EndpointSlice
+	nodes          []*corev1.Node
+	wantTargets    []target
+	wantTargetType string
+	wantErr        error
 }
 
-// multiplePortsTestCase verifies only the referenced numeric port is
-// mirrored out of several the Service defines.
-func multiplePortsTestCase() buildMirrorServiceTestCase {
-	return buildMirrorServiceTestCase{
-		name: "multiple ports picks only the referenced one",
-		tgb: &targetGroupBinding{
-			ObjectMeta: metav1.ObjectMeta{Name: "multi", Namespace: "default"},
-			Spec: targetGroupBindingSpec{
-				ServiceRef: serviceReference{Name: "multi", Port: intstr.FromInt32(9090)},
-			},
-		},
-		service: &corev1.Service{
-			ObjectMeta: metav1.ObjectMeta{Name: "multi", Namespace: "default"},
-			Spec: corev1.ServiceSpec{
-				Selector: map[string]string{"app": "multi"},
-				Ports: []corev1.ServicePort{
-					{Name: "metrics", Port: 9100, TargetPort: intstr.FromInt32(9100)},
-					{Name: "grpc", Port: 9090, TargetPort: intstr.FromInt32(9091), Protocol: corev1.ProtocolTCP},
-					{Name: "admin", Port: 9200, TargetPort: intstr.FromInt32(9200)},
-				},
-			},
-		},
-		want: &corev1.Service{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "multi-fjord-tgb",
-				Namespace: "default",
-				Labels:    map[string]string{"app.kubernetes.io/managed-by": "fjord"},
-				OwnerReferences: []metav1.OwnerReference{
-					{APIVersion: "elbv2.k8s.aws/v1beta1", Kind: "TargetGroupBinding", Name: "multi"},
-				},
-			},
-			Spec: corev1.ServiceSpec{
-				Type:     corev1.ServiceTypeLoadBalancer,
-				Selector: map[string]string{"app": "multi"},
-				Ports: []corev1.ServicePort{
-					{Name: "grpc", Port: 9090, TargetPort: intstr.FromInt32(9091), Protocol: corev1.ProtocolTCP},
-				},
-			},
-		},
-	}
+func resolveTargetsTestCases() []resolveTargetsTestCase {
+	cases := resolveTargetsIPTestCases()
+	cases = append(cases, resolveTargetsInstanceTestCases()...)
+
+	return append(cases, resolveTargetsErrorCases()...)
 }
 
-// buildMirrorServiceErrorCases returns TestBuildMirrorService's cases that
-// expect buildMirrorService to return an error.
-func buildMirrorServiceErrorCases() []buildMirrorServiceTestCase {
-	return []buildMirrorServiceTestCase{
+// resolveTargetsIPTestCases returns TestResolveTargets' targetType ip cases
+// (including targetType left empty, which defaults to ip).
+func resolveTargetsIPTestCases() []resolveTargetsTestCase {
+	return []resolveTargetsTestCase{
 		{
-			name: "port not found",
+			name:           "ip target type resolves ready endpoints only",
+			tgb:            haroPreviewGatewayTGB(targetTypeIP),
+			service:        haroPreviewGatewayService(),
+			endpointSlices: []*discoveryv1.EndpointSlice{haroPreviewGatewayEndpointSlice()},
+			wantTargets: []target{
+				{Address: "10.244.0.5", Port: 10080},
+				{Address: "10.244.0.6", Port: 10080},
+			},
+			wantTargetType: targetTypeIP,
+		},
+		{
+			name:           "target type absent defaults to ip",
+			tgb:            haroPreviewGatewayTGB(""),
+			service:        haroPreviewGatewayService(),
+			endpointSlices: []*discoveryv1.EndpointSlice{haroPreviewGatewayEndpointSlice()},
+			wantTargets: []target{
+				{Address: "10.244.0.5", Port: 10080},
+				{Address: "10.244.0.6", Port: 10080},
+			},
+			wantTargetType: targetTypeIP,
+		},
+		differentServicePortTestCase(),
+		noMatchingEndpointSliceTestCase(),
+	}
+}
+
+// differentServicePortTestCase verifies resolveIPTargets only picks up the
+// EndpointSlice port matching the referenced Service port's own name,
+// ignoring the slice's other ports.
+func differentServicePortTestCase() resolveTargetsTestCase {
+	return resolveTargetsTestCase{
+		name: "ip target type ignores endpoint slices for a different service port",
+		tgb: &targetGroupBinding{
+			ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "default"},
+			Spec:       targetGroupBindingSpec{ServiceRef: serviceReference{Name: "web", Port: intstr.FromString("https")}},
+		},
+		service: &corev1.Service{
+			ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "default"},
+			Spec: corev1.ServiceSpec{
+				Selector: map[string]string{"app": "web"},
+				Ports: []corev1.ServicePort{
+					{Name: "http", Port: 80, TargetPort: intstr.FromInt32(8080)},
+					{Name: "https", Port: 443, TargetPort: intstr.FromInt32(8443)},
+				},
+			},
+		},
+		endpointSlices: []*discoveryv1.EndpointSlice{{
+			ObjectMeta: metav1.ObjectMeta{Name: "web-abcde", Namespace: "default", Labels: map[string]string{discoveryv1.LabelServiceName: "web"}},
+			Ports: []discoveryv1.EndpointPort{
+				{Name: ptr("http"), Port: ptr(int32(8080))},
+				{Name: ptr("https"), Port: ptr(int32(8443))},
+			},
+			Endpoints: []discoveryv1.Endpoint{
+				{Addresses: []string{"10.244.1.1"}},
+			},
+		}},
+		wantTargets:    []target{{Address: "10.244.1.1", Port: 8443}},
+		wantTargetType: targetTypeIP,
+	}
+}
+
+// noMatchingEndpointSliceTestCase verifies resolveIPTargets resolves no
+// targets, rather than erroring, when the referenced Service has no
+// EndpointSlice yet (e.g. no pods have started).
+func noMatchingEndpointSliceTestCase() resolveTargetsTestCase {
+	return resolveTargetsTestCase{
+		name: "ip target type with no matching endpoint slice resolves no targets",
+		tgb: &targetGroupBinding{
+			ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "default"},
+			Spec:       targetGroupBindingSpec{ServiceRef: serviceReference{Name: "web", Port: intstr.FromInt32(80)}},
+		},
+		service: &corev1.Service{
+			ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "default"},
+			Spec: corev1.ServiceSpec{
+				Selector: map[string]string{"app": "web"},
+				Ports:    []corev1.ServicePort{{Name: "http", Port: 80}},
+			},
+		},
+		wantTargets:    []target{},
+		wantTargetType: targetTypeIP,
+	}
+}
+
+// resolveTargetsInstanceTestCases returns TestResolveTargets' targetType
+// instance cases.
+func resolveTargetsInstanceTestCases() []resolveTargetsTestCase {
+	nodePortService := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "default"},
+		Spec: corev1.ServiceSpec{
+			Type:     corev1.ServiceTypeNodePort,
+			Selector: map[string]string{"app": "web"},
+			Ports:    []corev1.ServicePort{{Name: "http", Port: 80, NodePort: 31080}},
+		},
+	}
+
+	nodes := []*corev1.Node{
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "node-b"},
+			Status: corev1.NodeStatus{Addresses: []corev1.NodeAddress{
+				{Type: corev1.NodeInternalIP, Address: "192.168.1.20"},
+			}},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "node-a"},
+			Status: corev1.NodeStatus{Addresses: []corev1.NodeAddress{
+				{Type: corev1.NodeInternalIP, Address: "192.168.1.10"},
+			}},
+		},
+	}
+
+	return []resolveTargetsTestCase{
+		{
+			name: "instance target type against a nodeport service",
 			tgb: &targetGroupBinding{
 				ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "default"},
-				Spec: targetGroupBindingSpec{
-					ServiceRef: serviceReference{Name: "web", Port: intstr.FromInt32(9999)},
-				},
+				Spec:       targetGroupBindingSpec{ServiceRef: serviceReference{Name: "web", Port: intstr.FromInt32(80)}, TargetType: targetTypeInstance},
+			},
+			service: nodePortService,
+			nodes:   nodes,
+			wantTargets: []target{
+				{Address: "192.168.1.10", Port: 31080},
+				{Address: "192.168.1.20", Port: 31080},
+			},
+			wantTargetType: targetTypeInstance,
+		},
+	}
+}
+
+// resolveTargetsErrorCases returns TestResolveTargets' cases that expect
+// resolveTargets to return an error.
+func resolveTargetsErrorCases() []resolveTargetsTestCase {
+	return []resolveTargetsTestCase{
+		{
+			name: "ip target type: port not found",
+			tgb: &targetGroupBinding{
+				ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "default"},
+				Spec:       targetGroupBindingSpec{ServiceRef: serviceReference{Name: "web", Port: intstr.FromInt32(9999)}},
 			},
 			service: &corev1.Service{
 				ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "default"},
@@ -207,145 +234,93 @@ func buildMirrorServiceErrorCases() []buildMirrorServiceTestCase {
 			wantErr: ErrServicePortNotFound,
 		},
 		{
-			name: "named port not found",
+			name: "ip target type: selector-less service",
 			tgb: &targetGroupBinding{
 				ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "default"},
-				Spec: targetGroupBindingSpec{
-					ServiceRef: serviceReference{Name: "web", Port: intstr.FromString("grpc")},
-				},
+				Spec:       targetGroupBindingSpec{ServiceRef: serviceReference{Name: "web", Port: intstr.FromInt32(80)}},
 			},
 			service: &corev1.Service{
 				ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "default"},
-				Spec: corev1.ServiceSpec{
-					Selector: map[string]string{"app": "web"},
-					Ports:    []corev1.ServicePort{{Name: "http", Port: 80}},
-				},
-			},
-			wantErr: ErrServicePortNotFound,
-		},
-		{
-			name: "selector-less service",
-			tgb: &targetGroupBinding{
-				ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "default"},
-				Spec: targetGroupBindingSpec{
-					ServiceRef: serviceReference{Name: "web", Port: intstr.FromInt32(80)},
-				},
-			},
-			service: &corev1.Service{
-				ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "default"},
-				Spec: corev1.ServiceSpec{
-					Ports: []corev1.ServicePort{{Name: "http", Port: 80}},
-				},
+				Spec:       corev1.ServiceSpec{Ports: []corev1.ServicePort{{Name: "http", Port: 80}}},
 			},
 			wantErr: ErrSelectorlessService,
 		},
+		{
+			name: "instance target type against a clusterip service",
+			tgb: &targetGroupBinding{
+				ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "default"},
+				Spec:       targetGroupBindingSpec{ServiceRef: serviceReference{Name: "web", Port: intstr.FromInt32(80)}, TargetType: targetTypeInstance},
+			},
+			service: &corev1.Service{
+				ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "default"},
+				Spec: corev1.ServiceSpec{
+					Type:     corev1.ServiceTypeClusterIP,
+					Selector: map[string]string{"app": "web"},
+					Ports:    []corev1.ServicePort{{Name: "http", Port: 80}},
+				},
+			},
+			wantErr: ErrUnsupportedServiceType,
+		},
 	}
 }
 
-func TestBuildMirrorService(t *testing.T) {
+func TestResolveTargets(t *testing.T) {
 	t.Parallel()
 
-	for _, tt := range buildMirrorServiceTestCases() {
+	for _, tt := range resolveTargetsTestCases() {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got, err := buildMirrorService(tt.tgb, tt.service)
+			gotTargets, gotTargetType, err := resolveTargets(tt.tgb, tt.service, tt.endpointSlices, tt.nodes)
 
 			if tt.wantErr != nil {
 				if !errors.Is(err, tt.wantErr) {
-					t.Fatalf("buildMirrorService() error = %v, want %v", err, tt.wantErr)
+					t.Fatalf("resolveTargets() error = %v, want %v", err, tt.wantErr)
 				}
 
 				return
 			}
 
 			if err != nil {
-				t.Fatalf("buildMirrorService() unexpected error: %v", err)
+				t.Fatalf("resolveTargets() unexpected error: %v", err)
 			}
 
-			assertServiceEqual(t, got, tt.want)
+			if gotTargetType != tt.wantTargetType {
+				t.Errorf("resolveTargets() targetType = %q, want %q", gotTargetType, tt.wantTargetType)
+			}
+
+			assertTargetsEqual(t, gotTargets, tt.wantTargets)
 		})
 	}
 }
 
-// assertServiceEqual compares the fields buildMirrorService actually sets,
-// rather than requiring reflect.DeepEqual over the full corev1.Service
-// zero-value surface (which would make every test case list every unset
-// field).
-func assertServiceEqual(t *testing.T, got, want *corev1.Service) {
+// assertTargetsEqual compares got and want target-by-target, requiring the
+// exact same order -- resolveTargets always sorts its result (see
+// sortTargets), so a mismatched order is itself a failure worth reporting.
+func assertTargetsEqual(t *testing.T, got, want []target) {
 	t.Helper()
 
-	if got.Name != want.Name || got.Namespace != want.Namespace {
-		t.Errorf("name/namespace = %s/%s, want %s/%s", got.Namespace, got.Name, want.Namespace, want.Name)
+	if len(got) != len(want) {
+		t.Fatalf("resolveTargets() targets = %+v, want %+v", got, want)
 	}
 
-	if got.Labels[managedByLabelKey] != want.Labels[managedByLabelKey] {
-		t.Errorf("labels[%s] = %q, want %q", managedByLabelKey, got.Labels[managedByLabelKey], want.Labels[managedByLabelKey])
-	}
-
-	assertOwnerReference(t, got, want)
-	assertServiceSpec(t, got, want)
-}
-
-// assertOwnerReference checks got carries exactly one OwnerReference,
-// matching want's on the fields buildMirrorService sets, and marked as a
-// controller reference with BlockOwnerDeletion.
-func assertOwnerReference(t *testing.T, got, want *corev1.Service) {
-	t.Helper()
-
-	if len(got.OwnerReferences) != 1 {
-		t.Fatalf("OwnerReferences = %v, want exactly 1", got.OwnerReferences)
-	}
-
-	gotOwner, wantOwner := got.OwnerReferences[0], want.OwnerReferences[0]
-	if gotOwner.APIVersion != wantOwner.APIVersion || gotOwner.Kind != wantOwner.Kind || gotOwner.Name != wantOwner.Name || gotOwner.UID != wantOwner.UID {
-		t.Errorf("OwnerReferences[0] = %+v, want %+v", gotOwner, wantOwner)
-	}
-
-	if gotOwner.Controller == nil || !*gotOwner.Controller {
-		t.Error("OwnerReferences[0].Controller = nil/false, want true")
-	}
-
-	if gotOwner.BlockOwnerDeletion == nil || !*gotOwner.BlockOwnerDeletion {
-		t.Error("OwnerReferences[0].BlockOwnerDeletion = nil/false, want true")
-	}
-}
-
-// assertServiceSpec checks got.Spec matches want.Spec: type: LoadBalancer,
-// the same selector entries, and exactly the one port buildMirrorService
-// ever builds.
-func assertServiceSpec(t *testing.T, got, want *corev1.Service) {
-	t.Helper()
-
-	if got.Spec.Type != corev1.ServiceTypeLoadBalancer {
-		t.Errorf("Spec.Type = %v, want %v", got.Spec.Type, corev1.ServiceTypeLoadBalancer)
-	}
-
-	if len(got.Spec.Selector) != len(want.Spec.Selector) {
-		t.Errorf("Spec.Selector = %v, want %v", got.Spec.Selector, want.Spec.Selector)
-	}
-
-	for k, v := range want.Spec.Selector {
-		if got.Spec.Selector[k] != v {
-			t.Errorf("Spec.Selector[%q] = %q, want %q", k, got.Spec.Selector[k], v)
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("resolveTargets() targets[%d] = %+v, want %+v", i, got[i], want[i])
 		}
 	}
-
-	if len(got.Spec.Ports) != 1 || len(want.Spec.Ports) != 1 {
-		t.Fatalf("Spec.Ports = %v, want exactly 1 port matching %v", got.Spec.Ports, want.Spec.Ports)
-	}
-
-	if got.Spec.Ports[0] != want.Spec.Ports[0] {
-		t.Errorf("Spec.Ports[0] = %+v, want %+v", got.Spec.Ports[0], want.Spec.Ports[0])
-	}
 }
 
-// TestBuildMirrorServiceCopiesSelector verifies the mirror's selector is an
-// independent copy: mutating it afterward must not affect the source
-// Service's own selector map.
-func TestBuildMirrorServiceCopiesSelector(t *testing.T) {
+// TestResolveTargetsDeterministicOrdering verifies resolveTargets sorts its
+// result by address then port regardless of the input EndpointSlice order,
+// so repeated reconciles never churn a TargetGroupBinding's status.
+func TestResolveTargetsDeterministicOrdering(t *testing.T) {
 	t.Parallel()
 
+	tgb := &targetGroupBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "default"},
+		Spec:       targetGroupBindingSpec{ServiceRef: serviceReference{Name: "web", Port: intstr.FromInt32(80)}},
+	}
 	service := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "default"},
 		Spec: corev1.ServiceSpec{
@@ -353,27 +328,24 @@ func TestBuildMirrorServiceCopiesSelector(t *testing.T) {
 			Ports:    []corev1.ServicePort{{Port: 80}},
 		},
 	}
-	tgb := &targetGroupBinding{
-		ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "default"},
-		Spec:       targetGroupBindingSpec{ServiceRef: serviceReference{Name: "web", Port: intstr.FromInt32(80)}},
+	slices := []*discoveryv1.EndpointSlice{
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "web-2", Namespace: "default", Labels: map[string]string{discoveryv1.LabelServiceName: "web"}},
+			Ports:      []discoveryv1.EndpointPort{{Port: ptr(int32(80))}},
+			Endpoints:  []discoveryv1.Endpoint{{Addresses: []string{"10.244.0.9"}}},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "web-1", Namespace: "default", Labels: map[string]string{discoveryv1.LabelServiceName: "web"}},
+			Ports:      []discoveryv1.EndpointPort{{Port: ptr(int32(80))}},
+			Endpoints:  []discoveryv1.Endpoint{{Addresses: []string{"10.244.0.1"}}},
+		},
 	}
 
-	mirror, err := buildMirrorService(tgb, service)
+	got, _, err := resolveTargets(tgb, service, slices, nil)
 	if err != nil {
-		t.Fatalf("buildMirrorService() error: %v", err)
+		t.Fatalf("resolveTargets() error: %v", err)
 	}
 
-	mirror.Spec.Selector["app"] = "mutated"
-
-	if service.Spec.Selector["app"] != "web" {
-		t.Errorf("source service selector mutated: %v", service.Spec.Selector)
-	}
-}
-
-func TestMirrorServiceName(t *testing.T) {
-	t.Parallel()
-
-	if got, want := mirrorServiceName("haro-preview-gateway"), "haro-preview-gateway-fjord-tgb"; got != want {
-		t.Errorf("mirrorServiceName() = %q, want %q", got, want)
-	}
+	want := []target{{Address: "10.244.0.1", Port: 80}, {Address: "10.244.0.9", Port: 80}}
+	assertTargetsEqual(t, got, want)
 }

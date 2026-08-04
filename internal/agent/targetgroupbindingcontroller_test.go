@@ -9,9 +9,11 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	discoveryv1 "k8s.io/api/discovery/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -19,6 +21,7 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/kubernetes/scheme"
 	corelisters "k8s.io/client-go/listers/core/v1"
+	discoverylisters "k8s.io/client-go/listers/discovery/v1"
 	"k8s.io/client-go/tools/cache"
 )
 
@@ -30,8 +33,9 @@ func discardLogger() *slog.Logger {
 }
 
 // tgbUnstructured builds an unstructured TargetGroupBinding for use in a
-// test's tgbIndexer, without going through decodeTargetGroupBinding.
-func tgbUnstructured(namespace, name string, uid types.UID, serviceName string, port intstr.IntOrString, targetGroupARN string) *unstructured.Unstructured {
+// test's tgbIndexer or dynamic fake client, without going through
+// decodeTargetGroupBinding.
+func tgbUnstructured(namespace, name string, generation int64, serviceName string, port intstr.IntOrString, targetType string) *unstructured.Unstructured {
 	spec := map[string]any{
 		"serviceRef": map[string]any{
 			"name": serviceName,
@@ -39,17 +43,17 @@ func tgbUnstructured(namespace, name string, uid types.UID, serviceName string, 
 		},
 	}
 
-	if targetGroupARN != "" {
-		spec["targetGroupARN"] = targetGroupARN
+	if targetType != "" {
+		spec["targetType"] = targetType
 	}
 
 	return &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": TargetGroupBindingGroup + "/" + TargetGroupBindingVersion,
 		"kind":       TargetGroupBindingKind,
 		"metadata": map[string]any{
-			"name":      name,
-			"namespace": namespace,
-			"uid":       string(uid),
+			"name":       name,
+			"namespace":  namespace,
+			"generation": generation,
 		},
 		"spec": spec,
 	}}
@@ -100,7 +104,52 @@ func newServiceLister(t *testing.T, objs ...*corev1.Service) corelisters.Service
 	return corelisters.NewServiceLister(indexer)
 }
 
-func TestReconcileCreatesMirrorService(t *testing.T) {
+// newEndpointSliceLister returns a discoverylisters.EndpointSliceLister (as
+// TargetGroupBindingController's EndpointSlice informer would build)
+// pre-populated with objs.
+func newEndpointSliceLister(t *testing.T, objs ...*discoveryv1.EndpointSlice) discoverylisters.EndpointSliceLister {
+	t.Helper()
+
+	indexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc})
+
+	for _, obj := range objs {
+		if err := indexer.Add(obj); err != nil {
+			t.Fatalf("indexer.Add: %v", err)
+		}
+	}
+
+	return discoverylisters.NewEndpointSliceLister(indexer)
+}
+
+// newNodeLister returns a corelisters.NodeLister (as
+// TargetGroupBindingController's Node informer would build) pre-populated
+// with objs.
+func newNodeLister(t *testing.T, objs ...*corev1.Node) corelisters.NodeLister {
+	t.Helper()
+
+	indexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc})
+
+	for _, obj := range objs {
+		if err := indexer.Add(obj); err != nil {
+			t.Fatalf("indexer.Add: %v", err)
+		}
+	}
+
+	return corelisters.NewNodeLister(indexer)
+}
+
+// newTestController returns a TargetGroupBindingController wired to a fake
+// Kubernetes clientset seeded with kubeObjs and a fake dynamic client seeded
+// with dynamicObjs (typically the TargetGroupBinding(s) reconcile writes
+// status back to).
+func newTestController(dynamicObjs []runtime.Object, kubeObjs ...runtime.Object) (*TargetGroupBindingController, *dynamicfake.FakeDynamicClient) {
+	client := fake.NewClientset(kubeObjs...)
+	dynamicClient := dynamicfake.NewSimpleDynamicClient(scheme.Scheme, dynamicObjs...)
+
+	return NewTargetGroupBindingController(client, dynamicClient, discardLogger()), dynamicClient
+}
+
+func TestReconcileWritesIPTargetsStatus(t *testing.T) {
 	t.Parallel()
 
 	service := &corev1.Service{
@@ -110,164 +159,106 @@ func TestReconcileCreatesMirrorService(t *testing.T) {
 			Ports:    []corev1.ServicePort{{Name: "http", Port: 80, TargetPort: intstr.FromInt32(8080)}},
 		},
 	}
-	uid := types.UID("11111111-1111-1111-1111-111111111111")
-	tgb := tgbUnstructured("default", "web", uid, "web", intstr.FromInt32(80), "arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/web/abc123")
+	slice := &discoveryv1.EndpointSlice{
+		ObjectMeta: metav1.ObjectMeta{Name: "web-abcde", Namespace: "default", Labels: map[string]string{discoveryv1.LabelServiceName: "web"}},
+		Ports:      []discoveryv1.EndpointPort{{Name: ptr("http"), Port: ptr(int32(8080))}},
+		Endpoints: []discoveryv1.Endpoint{
+			{Addresses: []string{"10.244.0.6"}},
+			{Addresses: []string{"10.244.0.5"}},
+		},
+	}
+	tgb := tgbUnstructured("default", "web", 3, "web", intstr.FromInt32(80), "")
 
-	client := fake.NewClientset(service)
-	c := NewTargetGroupBindingController(client, dynamicfake.NewSimpleDynamicClient(scheme.Scheme), discardLogger())
+	c, dynamicClient := newTestController([]runtime.Object{tgb}, service)
 
-	err := c.reconcile(t.Context(), "default/web", newTGBIndexer(t, tgb), newServiceLister(t, service))
+	err := c.reconcile(t.Context(), "default/web", newTGBIndexer(t, tgb), newServiceLister(t, service), newEndpointSliceLister(t, slice), newNodeLister(t))
 	if err != nil {
 		t.Fatalf("reconcile() error: %v", err)
 	}
 
-	mirror, err := client.CoreV1().Services("default").Get(t.Context(), "web-fjord-tgb", metav1.GetOptions{})
-	if err != nil {
-		t.Fatalf("get mirror service: %v", err)
+	status := getTGBStatus(t, dynamicClient, "default", "web")
+
+	assertNestedInt64(t, status, 3, "observedGeneration")
+	assertNestedString(t, status, "ip", "targetType")
+
+	targets, found, err := unstructured.NestedSlice(status, "targets")
+	if err != nil || !found {
+		t.Fatalf("status.targets = %v, %v, %v", targets, found, err)
 	}
 
-	if mirror.Spec.Type != corev1.ServiceTypeLoadBalancer {
-		t.Errorf("mirror Spec.Type = %v, want %v", mirror.Spec.Type, corev1.ServiceTypeLoadBalancer)
+	if len(targets) != 2 {
+		t.Fatalf("status.targets = %v, want 2 entries", targets)
 	}
 
-	if mirror.Labels[managedByLabelKey] != managedByLabelValue {
-		t.Errorf("mirror Labels[%s] = %q, want %q", managedByLabelKey, mirror.Labels[managedByLabelKey], managedByLabelValue)
-	}
-
-	if len(mirror.OwnerReferences) != 1 || mirror.OwnerReferences[0].UID != uid {
-		t.Errorf("mirror OwnerReferences = %v, want a single owner with UID %s", mirror.OwnerReferences, uid)
-	}
+	assertTarget(t, targets[0], "10.244.0.5", 8080)
+	assertTarget(t, targets[1], "10.244.0.6", 8080)
 }
 
-func TestReconcileUpdatesExistingMirrorServicePreservingNodePort(t *testing.T) {
+func TestReconcileWritesInstanceTargetsStatus(t *testing.T) {
 	t.Parallel()
 
 	service := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "default"},
 		Spec: corev1.ServiceSpec{
-			Selector: map[string]string{"app": "web", "version": "v2"},
-			Ports:    []corev1.ServicePort{{Name: "http", Port: 80, TargetPort: intstr.FromInt32(9090)}},
-		},
-	}
-	existingMirror := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "web-fjord-tgb",
-			Namespace: "default",
-			Labels:    map[string]string{managedByLabelKey: managedByLabelValue},
-		},
-		Spec: corev1.ServiceSpec{
-			Type:     corev1.ServiceTypeLoadBalancer,
+			Type:     corev1.ServiceTypeNodePort,
 			Selector: map[string]string{"app": "web"},
-			Ports:    []corev1.ServicePort{{Name: "http", Port: 80, TargetPort: intstr.FromInt32(8080), NodePort: 31234}},
+			Ports:    []corev1.ServicePort{{Name: "http", Port: 80, NodePort: 31080}},
 		},
 	}
-	tgb := tgbUnstructured("default", "web", "", "web", intstr.FromInt32(80), "")
+	node := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: "node-a"},
+		Status:     corev1.NodeStatus{Addresses: []corev1.NodeAddress{{Type: corev1.NodeInternalIP, Address: "192.168.1.10"}}},
+	}
+	tgb := tgbUnstructured("default", "web", 1, "web", intstr.FromInt32(80), targetTypeInstance)
 
-	client := fake.NewClientset(service, existingMirror)
-	c := NewTargetGroupBindingController(client, dynamicfake.NewSimpleDynamicClient(scheme.Scheme), discardLogger())
+	c, dynamicClient := newTestController([]runtime.Object{tgb}, service)
 
-	if err := c.reconcile(t.Context(), "default/web", newTGBIndexer(t, tgb), newServiceLister(t, service)); err != nil {
+	err := c.reconcile(t.Context(), "default/web", newTGBIndexer(t, tgb), newServiceLister(t, service), newEndpointSliceLister(t), newNodeLister(t, node))
+	if err != nil {
 		t.Fatalf("reconcile() error: %v", err)
 	}
 
-	mirror, err := client.CoreV1().Services("default").Get(t.Context(), "web-fjord-tgb", metav1.GetOptions{})
-	if err != nil {
-		t.Fatalf("get mirror service: %v", err)
+	status := getTGBStatus(t, dynamicClient, "default", "web")
+
+	assertNestedString(t, status, "instance", "targetType")
+
+	targets, found, err := unstructured.NestedSlice(status, "targets")
+	if err != nil || !found || len(targets) != 1 {
+		t.Fatalf("status.targets = %v, %v, %v, want exactly 1 entry", targets, found, err)
 	}
 
-	if len(mirror.Spec.Selector) != 2 || mirror.Spec.Selector["version"] != "v2" {
-		t.Errorf("mirror Spec.Selector = %v, want updated to %v", mirror.Spec.Selector, service.Spec.Selector)
-	}
-
-	if len(mirror.Spec.Ports) != 1 {
-		t.Fatalf("mirror Spec.Ports = %v, want exactly 1", mirror.Spec.Ports)
-	}
-
-	if mirror.Spec.Ports[0].TargetPort != intstr.FromInt32(9090) {
-		t.Errorf("mirror Spec.Ports[0].TargetPort = %v, want updated to 9090", mirror.Spec.Ports[0].TargetPort)
-	}
-
-	if mirror.Spec.Ports[0].NodePort != 31234 {
-		t.Errorf("mirror Spec.Ports[0].NodePort = %d, want preserved 31234", mirror.Spec.Ports[0].NodePort)
-	}
+	assertTarget(t, targets[0], "192.168.1.10", 31080)
 }
 
-func TestReconcileRefusesForeignService(t *testing.T) {
+func TestReconcileInstanceAgainstClusterIPServiceReturnsError(t *testing.T) {
 	t.Parallel()
 
 	service := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "default"},
 		Spec: corev1.ServiceSpec{
+			Type:     corev1.ServiceTypeClusterIP,
 			Selector: map[string]string{"app": "web"},
-			Ports:    []corev1.ServicePort{{Port: 80}},
+			Ports:    []corev1.ServicePort{{Name: "http", Port: 80}},
 		},
 	}
-	foreign := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{Name: "web-fjord-tgb", Namespace: "default"},
-		Spec:       corev1.ServiceSpec{Ports: []corev1.ServicePort{{Port: 1234}}},
-	}
-	tgb := tgbUnstructured("default", "web", "", "web", intstr.FromInt32(80), "")
+	tgb := tgbUnstructured("default", "web", 1, "web", intstr.FromInt32(80), targetTypeInstance)
 
-	client := fake.NewClientset(service, foreign)
-	c := NewTargetGroupBindingController(client, dynamicfake.NewSimpleDynamicClient(scheme.Scheme), discardLogger())
+	c, dynamicClient := newTestController([]runtime.Object{tgb}, service)
 
-	err := c.reconcile(t.Context(), "default/web", newTGBIndexer(t, tgb), newServiceLister(t, service))
-	if err == nil {
-		t.Fatal("reconcile() error = nil, want an error for a same-named Service fjord does not manage")
+	// reconcile logs the error and returns nil (it is a permanent
+	// misconfiguration, not a transient failure worth requeuing), so we
+	// assert on the absence of a status update instead of a returned error.
+	if err := c.reconcile(t.Context(), "default/web", newTGBIndexer(t, tgb), newServiceLister(t, service), newEndpointSliceLister(t), newNodeLister(t)); err != nil {
+		t.Fatalf("reconcile() error = %v, want nil (logged and skipped)", err)
 	}
 
-	unchanged, getErr := client.CoreV1().Services("default").Get(t.Context(), "web-fjord-tgb", metav1.GetOptions{})
-	if getErr != nil {
-		t.Fatalf("get foreign service: %v", getErr)
+	obj, err := dynamicClient.Resource(TargetGroupBindingGVR).Namespace("default").Get(t.Context(), "web", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get target group binding: %v", err)
 	}
 
-	if unchanged.Spec.Ports[0].Port != 1234 {
-		t.Errorf("foreign service was modified: %+v", unchanged.Spec.Ports)
-	}
-}
-
-func TestReconcileDeletesMirrorWhenTargetGroupBindingGone(t *testing.T) {
-	t.Parallel()
-
-	managedMirror := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "web-fjord-tgb",
-			Namespace: "default",
-			Labels:    map[string]string{managedByLabelKey: managedByLabelValue},
-		},
-	}
-
-	client := fake.NewClientset(managedMirror)
-	c := NewTargetGroupBindingController(client, dynamicfake.NewSimpleDynamicClient(scheme.Scheme), discardLogger())
-
-	// The indexer carries no TargetGroupBinding for "default/web", as if it
-	// had just been deleted.
-	if err := c.reconcile(t.Context(), "default/web", newTGBIndexer(t), newServiceLister(t)); err != nil {
-		t.Fatalf("reconcile() error: %v", err)
-	}
-
-	_, err := client.CoreV1().Services("default").Get(t.Context(), "web-fjord-tgb", metav1.GetOptions{})
-	if !apierrors.IsNotFound(err) {
-		t.Fatalf("get mirror service after reconcile: err = %v, want NotFound", err)
-	}
-}
-
-func TestReconcileDoesNotDeleteForeignServiceWhenTargetGroupBindingGone(t *testing.T) {
-	t.Parallel()
-
-	foreign := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{Name: "web-fjord-tgb", Namespace: "default"},
-	}
-
-	client := fake.NewClientset(foreign)
-	c := NewTargetGroupBindingController(client, dynamicfake.NewSimpleDynamicClient(scheme.Scheme), discardLogger())
-
-	if err := c.reconcile(t.Context(), "default/web", newTGBIndexer(t), newServiceLister(t)); err != nil {
-		t.Fatalf("reconcile() error: %v", err)
-	}
-
-	if _, err := client.CoreV1().Services("default").Get(t.Context(), "web-fjord-tgb", metav1.GetOptions{}); err != nil {
-		t.Fatalf("foreign service was deleted: %v", err)
+	if _, found, _ := unstructured.NestedMap(obj.Object, "status"); found {
+		t.Errorf("status = %v, want unset", obj.Object["status"])
 	}
 }
 
@@ -278,45 +269,119 @@ func TestReconcileSkipsSelectorlessServiceWithoutError(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "headless", Namespace: "default"},
 		Spec:       corev1.ServiceSpec{Ports: []corev1.ServicePort{{Port: 80}}},
 	}
-	tgb := tgbUnstructured("default", "headless", "", "headless", intstr.FromInt32(80), "")
+	tgb := tgbUnstructured("default", "headless", 1, "headless", intstr.FromInt32(80), "")
 
-	client := fake.NewClientset(service)
-	c := NewTargetGroupBindingController(client, dynamicfake.NewSimpleDynamicClient(scheme.Scheme), discardLogger())
+	c, dynamicClient := newTestController([]runtime.Object{tgb}, service)
 
-	if err := c.reconcile(t.Context(), "default/headless", newTGBIndexer(t, tgb), newServiceLister(t, service)); err != nil {
+	if err := c.reconcile(t.Context(), "default/headless", newTGBIndexer(t, tgb), newServiceLister(t, service), newEndpointSliceLister(t), newNodeLister(t)); err != nil {
 		t.Fatalf("reconcile() error = %v, want nil (skip with a warning)", err)
 	}
 
-	_, err := client.CoreV1().Services("default").Get(t.Context(), "headless-fjord-tgb", metav1.GetOptions{})
-	if !apierrors.IsNotFound(err) {
-		t.Fatalf("mirror service should not have been created, get err = %v", err)
+	obj, err := dynamicClient.Resource(TargetGroupBindingGVR).Namespace("default").Get(t.Context(), "headless", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get target group binding: %v", err)
+	}
+
+	if _, found, _ := unstructured.NestedMap(obj.Object, "status"); found {
+		t.Errorf("status = %v, want unset", obj.Object["status"])
 	}
 }
 
 func TestReconcileReferencedServiceNotFound(t *testing.T) {
 	t.Parallel()
 
-	tgb := tgbUnstructured("default", "web", "", "does-not-exist", intstr.FromInt32(80), "")
+	tgb := tgbUnstructured("default", "web", 1, "does-not-exist", intstr.FromInt32(80), "")
 
-	client := fake.NewClientset()
-	c := NewTargetGroupBindingController(client, dynamicfake.NewSimpleDynamicClient(scheme.Scheme), discardLogger())
+	c, _ := newTestController([]runtime.Object{tgb})
 
-	err := c.reconcile(t.Context(), "default/web", newTGBIndexer(t, tgb), newServiceLister(t))
+	err := c.reconcile(t.Context(), "default/web", newTGBIndexer(t, tgb), newServiceLister(t), newEndpointSliceLister(t), newNodeLister(t))
 	if err == nil {
 		t.Fatal("reconcile() error = nil, want an error for a missing referenced service")
+	}
+}
+
+func TestReconcileDoesNothingWhenTargetGroupBindingGone(t *testing.T) {
+	t.Parallel()
+
+	c, _ := newTestController(nil)
+
+	// The indexer carries no TargetGroupBinding for "default/web", as if it
+	// had just been deleted. reconcile has nothing left to clean up (see
+	// its doc comment), so this must be a no-op, not an error.
+	if err := c.reconcile(t.Context(), "default/web", newTGBIndexer(t), newServiceLister(t), newEndpointSliceLister(t), newNodeLister(t)); err != nil {
+		t.Fatalf("reconcile() error: %v", err)
+	}
+}
+
+// TestReconcileIsNoOpWhenTargetsUnchanged verifies a second reconcile that
+// resolves the exact same targets as the first does not write status again
+// (see updateStatus's doc comment) -- observed via the TargetGroupBinding's
+// resourceVersion staying the same across both calls.
+func TestReconcileIsNoOpWhenTargetsUnchanged(t *testing.T) {
+	t.Parallel()
+
+	service := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "default"},
+		Spec: corev1.ServiceSpec{
+			Selector: map[string]string{"app": "web"},
+			Ports:    []corev1.ServicePort{{Name: "http", Port: 80, TargetPort: intstr.FromInt32(8080)}},
+		},
+	}
+	slice := &discoveryv1.EndpointSlice{
+		ObjectMeta: metav1.ObjectMeta{Name: "web-abcde", Namespace: "default", Labels: map[string]string{discoveryv1.LabelServiceName: "web"}},
+		Ports:      []discoveryv1.EndpointPort{{Name: ptr("http"), Port: ptr(int32(8080))}},
+		Endpoints:  []discoveryv1.Endpoint{{Addresses: []string{"10.244.0.5"}}},
+	}
+	tgb := tgbUnstructured("default", "web", 1, "web", intstr.FromInt32(80), "")
+
+	c, dynamicClient := newTestController([]runtime.Object{tgb}, service)
+
+	indexer := newTGBIndexer(t, tgb)
+	serviceLister := newServiceLister(t, service)
+	endpointSliceLister := newEndpointSliceLister(t, slice)
+	nodeLister := newNodeLister(t)
+
+	if err := c.reconcile(t.Context(), "default/web", indexer, serviceLister, endpointSliceLister, nodeLister); err != nil {
+		t.Fatalf("reconcile() #1 error: %v", err)
+	}
+
+	afterFirst, err := dynamicClient.Resource(TargetGroupBindingGVR).Namespace("default").Get(t.Context(), "web", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get target group binding after first reconcile: %v", err)
+	}
+
+	// The controller's real informer indexer would already reflect
+	// afterFirst's resourceVersion (the informer watches the same object it
+	// reconciles), so refresh the test's indexer too before reconciling
+	// again.
+	if err := indexer.Update(afterFirst); err != nil {
+		t.Fatalf("indexer.Update: %v", err)
+	}
+
+	if err := c.reconcile(t.Context(), "default/web", indexer, serviceLister, endpointSliceLister, nodeLister); err != nil {
+		t.Fatalf("reconcile() #2 error: %v", err)
+	}
+
+	afterSecond, err := dynamicClient.Resource(TargetGroupBindingGVR).Namespace("default").Get(t.Context(), "web", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get target group binding after second reconcile: %v", err)
+	}
+
+	if afterFirst.GetResourceVersion() != afterSecond.GetResourceVersion() {
+		t.Errorf("resourceVersion changed from %q to %q on a no-op reconcile", afterFirst.GetResourceVersion(), afterSecond.GetResourceVersion())
 	}
 }
 
 func TestEnqueueTargetGroupBindingsForService(t *testing.T) {
 	t.Parallel()
 
-	matching := tgbUnstructured("default", "web", "", "web", intstr.FromInt32(80), "")
-	otherService := tgbUnstructured("default", "other", "", "other-svc", intstr.FromInt32(80), "")
-	otherNamespace := tgbUnstructured("kube-system", "web", "", "web", intstr.FromInt32(80), "")
+	matching := tgbUnstructured("default", "web", 1, "web", intstr.FromInt32(80), "")
+	otherService := tgbUnstructured("default", "other", 1, "other-svc", intstr.FromInt32(80), "")
+	otherNamespace := tgbUnstructured("kube-system", "web", 1, "web", intstr.FromInt32(80), "")
 
 	indexer := newTGBIndexer(t, matching, otherService, otherNamespace)
 	queue := newTestQueue()
-	c := NewTargetGroupBindingController(fake.NewClientset(), dynamicfake.NewSimpleDynamicClient(scheme.Scheme), discardLogger())
+	c, _ := newTestController(nil)
 
 	svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "default"}}
 	c.enqueueTargetGroupBindingsForService(queue, indexer, svc)
@@ -333,13 +398,120 @@ func TestEnqueueTargetGroupBindingsForService(t *testing.T) {
 func TestEnqueueTargetGroupBindingsForServiceIgnoresNonService(t *testing.T) {
 	t.Parallel()
 
-	c := NewTargetGroupBindingController(fake.NewClientset(), dynamicfake.NewSimpleDynamicClient(scheme.Scheme), discardLogger())
+	c, _ := newTestController(nil)
 	queue := newTestQueue()
 
 	c.enqueueTargetGroupBindingsForService(queue, newTGBIndexer(t), "not-a-service")
 
 	if got := queue.Len(); got != 0 {
 		t.Errorf("queue.Len() = %d, want 0", got)
+	}
+}
+
+func TestEnqueueTargetGroupBindingsForEndpointSlice(t *testing.T) {
+	t.Parallel()
+
+	matching := tgbUnstructured("default", "web", 1, "web", intstr.FromInt32(80), "")
+	other := tgbUnstructured("default", "other", 1, "other-svc", intstr.FromInt32(80), "")
+
+	indexer := newTGBIndexer(t, matching, other)
+	queue := newTestQueue()
+	c, _ := newTestController(nil)
+
+	slice := &discoveryv1.EndpointSlice{
+		ObjectMeta: metav1.ObjectMeta{Name: "web-abcde", Namespace: "default", Labels: map[string]string{discoveryv1.LabelServiceName: "web"}},
+	}
+	c.enqueueTargetGroupBindingsForEndpointSlice(queue, indexer, slice)
+
+	if got, want := queue.Len(), 1; got != want {
+		t.Fatalf("queue.Len() = %d, want %d (items: %v)", got, want, queue.items)
+	}
+
+	if queue.items[0] != "default/web" {
+		t.Errorf("enqueued key = %q, want %q", queue.items[0], "default/web")
+	}
+}
+
+func TestEnqueueTargetGroupBindingsForEndpointSliceIgnoresNonEndpointSlice(t *testing.T) {
+	t.Parallel()
+
+	c, _ := newTestController(nil)
+	queue := newTestQueue()
+
+	c.enqueueTargetGroupBindingsForEndpointSlice(queue, newTGBIndexer(t), "not-an-endpoint-slice")
+
+	if got := queue.Len(); got != 0 {
+		t.Errorf("queue.Len() = %d, want 0", got)
+	}
+}
+
+func TestEnqueueAllTargetGroupBindings(t *testing.T) {
+	t.Parallel()
+
+	a := tgbUnstructured("default", "a", 1, "a", intstr.FromInt32(80), "")
+	b := tgbUnstructured("kube-system", "b", 1, "b", intstr.FromInt32(80), "")
+
+	indexer := newTGBIndexer(t, a, b)
+	queue := newTestQueue()
+
+	enqueueAllTargetGroupBindings(queue, indexer)
+
+	if got, want := queue.Len(), 2; got != want {
+		t.Fatalf("queue.Len() = %d, want %d (items: %v)", got, want, queue.items)
+	}
+}
+
+// TestGarbageCollectLegacyMirrorServicesDeletesLegacyMirrors verifies
+// garbageCollectLegacyMirrorServices deletes a Service matching every trait
+// an earlier fjord version's mirror-Service emulation gave one, and leaves
+// alone a same-named Service in a different namespace that lacks fjord's
+// managed-by label entirely.
+func TestGarbageCollectLegacyMirrorServicesDeletesLegacyMirrors(t *testing.T) {
+	t.Parallel()
+
+	legacyMirror := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "web-fjord-tgb",
+			Namespace: "default",
+			Labels:    map[string]string{managedByLabelKey: managedByLabelValue},
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: TargetGroupBindingGroup + "/" + TargetGroupBindingVersion,
+				Kind:       TargetGroupBindingKind,
+				Name:       "web",
+				UID:        types.UID("11111111-1111-1111-1111-111111111111"),
+			}},
+		},
+	}
+	foreignUnlabeled := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "web-fjord-tgb", Namespace: "other-ns"},
+	}
+
+	c, _ := newTestController(nil, legacyMirror, foreignUnlabeled)
+
+	if err := c.garbageCollectLegacyMirrorServices(t.Context()); err != nil {
+		t.Fatalf("garbageCollectLegacyMirrorServices() error: %v", err)
+	}
+
+	_, err := c.client.CoreV1().Services("default").Get(t.Context(), "web-fjord-tgb", metav1.GetOptions{})
+	if !apierrors.IsNotFound(err) {
+		t.Errorf("get legacy mirror after gc: err = %v, want NotFound", err)
+	}
+
+	if _, err := c.client.CoreV1().Services("other-ns").Get(t.Context(), "web-fjord-tgb", metav1.GetOptions{}); err != nil {
+		t.Errorf("unlabeled same-named service was deleted: %v", err)
+	}
+}
+
+// TestGarbageCollectLegacyMirrorServicesIsSafeWithoutLegacyMirrors verifies
+// garbageCollectLegacyMirrorServices does not error when no fjord-managed
+// Service exists at all.
+func TestGarbageCollectLegacyMirrorServicesIsSafeWithoutLegacyMirrors(t *testing.T) {
+	t.Parallel()
+
+	c, _ := newTestController(nil)
+
+	if err := c.garbageCollectLegacyMirrorServices(t.Context()); err != nil {
+		t.Fatalf("garbageCollectLegacyMirrorServices() error: %v", err)
 	}
 }
 
@@ -353,7 +525,7 @@ func TestEnqueueTargetGroupBindingsForServiceIgnoresNonService(t *testing.T) {
 func TestTargetGroupBindingControllerRunReturnsOnContextCancel(t *testing.T) {
 	t.Parallel()
 
-	c := NewTargetGroupBindingController(fake.NewClientset(), dynamicfake.NewSimpleDynamicClient(scheme.Scheme), discardLogger())
+	c, _ := newTestController(nil)
 
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
@@ -366,9 +538,9 @@ func TestTargetGroupBindingControllerRunReturnsOnContextCancel(t *testing.T) {
 
 // TestTargetGroupBindingControllerRunReconciles is an end-to-end test of
 // Run's full wiring (informers, event handlers, workers): starting from a
-// pre-existing TargetGroupBinding and Service, it verifies the mirror
-// Service eventually appears, then that updating the Service's selector
-// eventually propagates to the mirror.
+// pre-existing TargetGroupBinding, Service, and EndpointSlice, it verifies
+// status.targets eventually reflects the EndpointSlice's Ready addresses,
+// then that a new Ready pod address eventually propagates too.
 func TestTargetGroupBindingControllerRunReconciles(t *testing.T) {
 	t.Parallel()
 
@@ -379,9 +551,14 @@ func TestTargetGroupBindingControllerRunReconciles(t *testing.T) {
 			Ports:    []corev1.ServicePort{{Name: "http", Port: 80, TargetPort: intstr.FromInt32(8080)}},
 		},
 	}
-	tgb := tgbUnstructured("default", "web", "", "web", intstr.FromInt32(80), "")
+	slice := &discoveryv1.EndpointSlice{
+		ObjectMeta: metav1.ObjectMeta{Name: "web-abcde", Namespace: "default", Labels: map[string]string{discoveryv1.LabelServiceName: "web"}},
+		Ports:      []discoveryv1.EndpointPort{{Name: ptr("http"), Port: ptr(int32(8080))}},
+		Endpoints:  []discoveryv1.Endpoint{{Addresses: []string{"10.244.0.5"}}},
+	}
+	tgb := tgbUnstructured("default", "web", 1, "web", intstr.FromInt32(80), "")
 
-	client := fake.NewClientset(service)
+	client := fake.NewClientset(service, slice)
 	dynamicClient := dynamicfake.NewSimpleDynamicClient(scheme.Scheme, tgb)
 	c := NewTargetGroupBindingController(client, dynamicClient, discardLogger())
 
@@ -392,16 +569,16 @@ func TestTargetGroupBindingControllerRunReconciles(t *testing.T) {
 
 	go func() { runDone <- c.Run(ctx) }()
 
-	waitForMirrorSelector(t, client, map[string]string{"app": "web"})
+	waitForTargets(t, dynamicClient, []string{"10.244.0.5"})
 
-	updated := service.DeepCopy()
-	updated.Spec.Selector = map[string]string{"app": "web", "canary": "true"}
+	updated := slice.DeepCopy()
+	updated.Endpoints = append(updated.Endpoints, discoveryv1.Endpoint{Addresses: []string{"10.244.0.6"}})
 
-	if _, err := client.CoreV1().Services("default").Update(ctx, updated, metav1.UpdateOptions{}); err != nil {
-		t.Fatalf("update service: %v", err)
+	if _, err := client.DiscoveryV1().EndpointSlices("default").Update(ctx, updated, metav1.UpdateOptions{}); err != nil {
+		t.Fatalf("update endpoint slice: %v", err)
 	}
 
-	waitForMirrorSelector(t, client, map[string]string{"app": "web", "canary": "true"})
+	waitForTargets(t, dynamicClient, []string{"10.244.0.5", "10.244.0.6"})
 
 	cancel()
 
@@ -415,28 +592,30 @@ func TestTargetGroupBindingControllerRunReconciles(t *testing.T) {
 	}
 }
 
-// waitForMirrorSelector polls until the "web-fjord-tgb" mirror Service's
-// selector equals want, or fails the test after a bounded amount of
-// waiting.
-func waitForMirrorSelector(t *testing.T, client *fake.Clientset, want map[string]string) {
+// waitForTargets polls until the "default/web" TargetGroupBinding's
+// status.targets addresses equal wantAddrs, or fails the test after a
+// bounded amount of waiting.
+func waitForTargets(t *testing.T, dynamicClient *dynamicfake.FakeDynamicClient, wantAddrs []string) {
 	t.Helper()
 
 	err := wait.PollUntilContextTimeout(t.Context(), 10*time.Millisecond, 2*time.Second, true, func(ctx context.Context) (bool, error) {
-		mirror, err := client.CoreV1().Services("default").Get(ctx, "web-fjord-tgb", metav1.GetOptions{})
-		if apierrors.IsNotFound(err) {
-			return false, nil
-		}
-
+		obj, err := dynamicClient.Resource(TargetGroupBindingGVR).Namespace("default").Get(ctx, "web", metav1.GetOptions{})
 		if err != nil {
-			return false, fmt.Errorf("get mirror service: %w", err)
+			return false, fmt.Errorf("get target group binding: %w", err)
 		}
 
-		if len(mirror.Spec.Selector) != len(want) {
+		targets, found, err := unstructured.NestedSlice(obj.Object, "status", "targets")
+		if err != nil {
+			return false, fmt.Errorf("read status.targets: %w", err)
+		}
+
+		if !found || len(targets) != len(wantAddrs) {
 			return false, nil
 		}
 
-		for k, v := range want {
-			if mirror.Spec.Selector[k] != v {
+		for i, addr := range wantAddrs {
+			m, ok := targets[i].(map[string]any)
+			if !ok || m["address"] != addr {
 				return false, nil
 			}
 		}
@@ -444,7 +623,67 @@ func waitForMirrorSelector(t *testing.T, client *fake.Clientset, want map[string
 		return true, nil
 	})
 	if err != nil {
-		t.Fatalf("wait for mirror service selector %v: %v", want, err)
+		t.Fatalf("wait for status.targets %v: %v", wantAddrs, err)
+	}
+}
+
+// getTGBStatus fetches the TargetGroupBinding named namespace/name through
+// dynamicClient and returns its decoded status map, failing the test if it
+// is missing.
+func getTGBStatus(t *testing.T, dynamicClient *dynamicfake.FakeDynamicClient, namespace, name string) map[string]any {
+	t.Helper()
+
+	obj, err := dynamicClient.Resource(TargetGroupBindingGVR).Namespace(namespace).Get(t.Context(), name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get target group binding %s/%s: %v", namespace, name, err)
+	}
+
+	status, found, err := unstructured.NestedMap(obj.Object, "status")
+	if err != nil || !found {
+		t.Fatalf("status = %v, %v, %v, want present", status, found, err)
+	}
+
+	return status
+}
+
+// assertTarget fails the test unless got (a status.targets[i] entry decoded
+// as map[string]any) has the given address and port.
+func assertTarget(t *testing.T, got any, wantAddress string, wantPort int64) {
+	t.Helper()
+
+	m, ok := got.(map[string]any)
+	if !ok {
+		t.Fatalf("target entry type = %T, want map[string]any", got)
+	}
+
+	if m["address"] != wantAddress {
+		t.Errorf("target.address = %v, want %q", m["address"], wantAddress)
+	}
+
+	if m["port"] != wantPort {
+		t.Errorf("target.port = %v, want %d", m["port"], wantPort)
+	}
+}
+
+// assertNestedInt64 fails the test unless the int64 field at path in obj
+// equals want.
+func assertNestedInt64(t *testing.T, obj map[string]any, want int64, path ...string) {
+	t.Helper()
+
+	got, found, err := unstructured.NestedInt64(obj, path...)
+	if err != nil || !found || got != want {
+		t.Errorf("%v = %v, %v, %v, want %d", path, got, found, err, want)
+	}
+}
+
+// assertNestedString fails the test unless the string field at path in obj
+// equals want.
+func assertNestedString(t *testing.T, obj map[string]any, want string, path ...string) {
+	t.Helper()
+
+	got, found, err := unstructured.NestedString(obj, path...)
+	if err != nil || !found || got != want {
+		t.Errorf("%v = %v, %v, %v, want %q", path, got, found, err, want)
 	}
 }
 

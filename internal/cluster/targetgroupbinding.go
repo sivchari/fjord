@@ -31,8 +31,11 @@ const (
 // emulation (internal/agent.TargetGroupBindingController, run inside
 // fjord-agent) reconciles. Real AWS Load Balancer Controller users apply a
 // TargetGroupBinding to bind a Service to an ALB/NLB TargetGroup; fjord has
-// no ALB, so it emulates the binding by mirroring the referenced Service as
-// a type: LoadBalancer Service instead (see the controller's package doc).
+// no ALB, so it emulates the binding by resolving the targets a real ALB
+// would register from the referenced Service -- pod IPs or node
+// address+nodePort, depending on targetType -- and reporting them in the
+// TargetGroupBinding's own status instead (see the controller's package
+// doc).
 //
 // This is always installed -- fjord's EKS emulation treats it as a
 // built-in feature, not an opt-in one -- but a TargetGroupBinding has no
@@ -118,7 +121,7 @@ func targetGroupBindingCRDVersion(preserveUnknownFields bool) apiextensionsv1.Cu
 				Type: "object",
 				Properties: map[string]apiextensionsv1.JSONSchemaProps{
 					"spec":   targetGroupBindingSpecSchema(preserveUnknownFields),
-					"status": {Type: "object", XPreserveUnknownFields: &preserveUnknownFields},
+					"status": targetGroupBindingStatusSchema(preserveUnknownFields),
 				},
 			},
 		},
@@ -163,6 +166,43 @@ func targetGroupBindingSpecSchema(preserveUnknownFields bool) apiextensionsv1.JS
 			"networking": {
 				Type:                   "object",
 				XPreserveUnknownFields: &preserveUnknownFields,
+			},
+		},
+	}
+}
+
+// targetGroupBindingStatusSchema builds the OpenAPI schema for
+// TargetGroupBinding's status: observedGeneration, targetType, and targets
+// (each an address/port pair) -- the fields
+// internal/agent.TargetGroupBindingController.reconcile writes (see that
+// package's resolveTargets). x-kubernetes-preserve-unknown-fields keeps
+// this tolerant of a real AWS Load Balancer Controller's own status fields
+// (e.g. targetHealthDescriptions) fjord does not populate.
+func targetGroupBindingStatusSchema(preserveUnknownFields bool) apiextensionsv1.JSONSchemaProps {
+	return apiextensionsv1.JSONSchemaProps{
+		Type:                   "object",
+		XPreserveUnknownFields: &preserveUnknownFields,
+		Properties: map[string]apiextensionsv1.JSONSchemaProps{
+			"observedGeneration": {Type: "integer", Format: "int64"},
+			"targetType": {
+				Type: "string",
+				Enum: []apiextensionsv1.JSON{
+					{Raw: []byte(`"instance"`)},
+					{Raw: []byte(`"ip"`)},
+				},
+			},
+			"targets": {
+				Type: "array",
+				Items: &apiextensionsv1.JSONSchemaPropsOrArray{
+					Schema: &apiextensionsv1.JSONSchemaProps{
+						Type:     "object",
+						Required: []string{"address", "port"},
+						Properties: map[string]apiextensionsv1.JSONSchemaProps{
+							"address": {Type: "string"},
+							"port":    {Type: "integer", Format: "int32"},
+						},
+					},
+				},
 			},
 		},
 	}

@@ -3,8 +3,10 @@ package agent
 import (
 	"errors"
 	"fmt"
+	"sort"
 
 	corev1 "k8s.io/api/core/v1"
+	discoveryv1 "k8s.io/api/discovery/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -26,18 +28,29 @@ const (
 	// TargetGroupBindingResource is the CRD's plural resource name.
 	TargetGroupBindingResource = "targetgroupbindings"
 
-	// mirrorServiceSuffix names the mirror LoadBalancer Service
-	// buildMirrorService creates for a TargetGroupBinding, appended to the
-	// TargetGroupBinding's own name.
-	mirrorServiceSuffix = "-fjord-tgb"
+	// legacyMirrorServiceSuffix is the name suffix an earlier fjord version
+	// gave every mirror Service it created for a TargetGroupBinding, before
+	// TargetGroupBindingController switched to resolving targets and
+	// reporting them in status instead (see this package's doc comment).
+	// TargetGroupBindingController.garbageCollectLegacyMirrorServices uses
+	// it, alongside managedByLabelKey/managedByLabelValue, to find and
+	// remove leftovers from that earlier version.
+	legacyMirrorServiceSuffix = "-fjord-tgb"
 
-	// managedByLabelKey and managedByLabelValue mark every mirror Service
-	// buildMirrorService creates as fjord-managed, so
-	// TargetGroupBindingController never overwrites or deletes a
-	// differently-owned Service that happens to occupy the same
-	// deterministic name.
+	// managedByLabelKey and managedByLabelValue marked every mirror Service
+	// an earlier fjord version created (see legacyMirrorServiceSuffix) as
+	// fjord-managed. TargetGroupBindingController.garbageCollectLegacyMirrorServices
+	// still checks for this label, so it never deletes a same-named Service
+	// it did not itself create.
 	managedByLabelKey   = "app.kubernetes.io/managed-by"
 	managedByLabelValue = "fjord"
+
+	// targetTypeIP and targetTypeInstance are the two targetType values the
+	// upstream elbv2.k8s.aws/v1beta1 CRD defines. targetTypeIP is also the
+	// default effectiveTargetType applies when spec.targetType is empty,
+	// matching the upstream CRD's own default.
+	targetTypeIP       = "ip"
+	targetTypeInstance = "instance"
 )
 
 // TargetGroupBindingGVR is the dynamic client GroupVersionResource for
@@ -48,16 +61,24 @@ var TargetGroupBindingGVR = schema.GroupVersionResource{
 	Resource: TargetGroupBindingResource,
 }
 
-// ErrSelectorlessService is returned by buildMirrorService when the
-// TargetGroupBinding's referenced Service carries no selector: fjord has no
-// Endpoints/EndpointSlice-based mirroring, so such a Service cannot be
-// mirrored.
+// ErrSelectorlessService is returned by resolveTargets when the
+// TargetGroupBinding's referenced Service carries no selector: fjord
+// resolves ip-typed targets from that Service's EndpointSlices, which
+// Kubernetes' own EndpointSlice controller only ever populates for a
+// Service with a selector.
 var ErrSelectorlessService = errors.New("target group binding: referenced service has no selector")
 
-// ErrServicePortNotFound is returned by buildMirrorService when the
+// ErrServicePortNotFound is returned by resolveTargets when the
 // TargetGroupBinding's spec.serviceRef.port does not match any port on the
 // referenced Service.
 var ErrServicePortNotFound = errors.New("target group binding: referenced service port not found")
+
+// ErrUnsupportedServiceType is returned by resolveTargets when
+// spec.targetType is "instance" but the referenced Service is neither
+// type: NodePort nor type: LoadBalancer: instance targets are a node
+// address paired with the Service's nodePort, and only those two Service
+// types have one allocated.
+var ErrUnsupportedServiceType = errors.New("target group binding: instance target type requires a NodePort or LoadBalancer service")
 
 // targetGroupBinding is fjord's typed view of an elbv2.k8s.aws/v1beta1
 // TargetGroupBinding, decoded from the unstructured object the dynamic
@@ -75,9 +96,11 @@ type targetGroupBinding struct {
 // targetGroupBindingSpec is the subset of elbv2.k8s.aws/v1beta1
 // TargetGroupBindingSpec fjord's emulation reads. TargetGroupARN is a real
 // AWS ARN with no local meaning and is always ignored (see
-// TargetGroupBindingController.reconcile). TargetType (instance vs. ip)
-// makes no difference to fjord's mirror-Service emulation either: both are
-// absorbed into the same type: LoadBalancer Service regardless.
+// TargetGroupBindingController.reconcile). TargetType selects how
+// resolveTargets resolves targets: "ip" (the default, applied by
+// effectiveTargetType when this is empty) resolves pod IPs from the
+// referenced Service's EndpointSlices; "instance" resolves node addresses
+// paired with the Service's nodePort.
 type targetGroupBindingSpec struct {
 	ServiceRef serviceReference `json:"serviceRef"`
 	TargetType string           `json:"targetType,omitempty"`
@@ -97,77 +120,23 @@ type serviceReference struct {
 	Port intstr.IntOrString `json:"port"`
 }
 
-// mirrorServiceName returns the deterministic name buildMirrorService gives
-// the mirror Service for the TargetGroupBinding named tgbName.
-func mirrorServiceName(tgbName string) string {
-	return tgbName + mirrorServiceSuffix
+// target is a single resolved backend TargetGroupBindingController reports
+// in a TargetGroupBinding's status.targets: for targetType ip, a pod IP
+// paired with the container port real traffic would reach; for targetType
+// instance, a node's address paired with the referenced Service's
+// nodePort.
+type target struct {
+	Address string `json:"address"`
+	Port    int32  `json:"port"`
 }
 
-// buildMirrorService builds the desired mirror Service for tgb: a
-// type: LoadBalancer Service in the same namespace, reusing service's
-// selector and the single port tgb.Spec.ServiceRef.Port identifies on
-// service.
-//
-// fjord has no ALB to register targets with, so instead of mutating service
-// in place (which another controller, e.g. Envoy Gateway, may already own
-// and reconcile), it creates a separate mirror Service carrying the same
-// selector. Giving that mirror type: LoadBalancer reproduces a
-// TargetGroupBinding's real meaning locally: "this Service is the
-// externally reachable backend". The mirror's EXTERNAL-IP is only populated
-// once metallb (`fjord create cluster --with-loadbalancer`) is deployed;
-// TargetGroupBindingController logs a warning when it creates a mirror.
-//
-// tgb.Spec.TargetGroupARN is always ignored (see targetGroupBindingSpec's
-// doc comment). tgb.Spec.TargetType does not change the mirror built here
-// either: whether real traffic would have reached pods directly (ip) or via
-// each node's NodePort (instance), the local mirror routes through the
-// referenced Service's own selector regardless.
-//
-// buildMirrorService returns an error wrapping ErrSelectorlessService if
-// service carries no selector, or ErrServicePortNotFound if
-// tgb.Spec.ServiceRef.Port does not match any of service's ports.
-func buildMirrorService(tgb *targetGroupBinding, service *corev1.Service) (*corev1.Service, error) {
-	if len(service.Spec.Selector) == 0 {
-		return nil, fmt.Errorf("service %s/%s: %w", service.Namespace, service.Name, ErrSelectorlessService)
-	}
-
-	port, err := resolveServicePort(service, tgb.Spec.ServiceRef.Port)
-	if err != nil {
-		return nil, err
-	}
-
-	selector := make(map[string]string, len(service.Spec.Selector))
-	for k, v := range service.Spec.Selector {
-		selector[k] = v
-	}
-
-	isController := true
-	blockOwnerDeletion := true
-
-	return &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      mirrorServiceName(tgb.Name),
-			Namespace: tgb.Namespace,
-			Labels: map[string]string{
-				managedByLabelKey: managedByLabelValue,
-			},
-			OwnerReferences: []metav1.OwnerReference{
-				{
-					APIVersion:         TargetGroupBindingGroup + "/" + TargetGroupBindingVersion,
-					Kind:               TargetGroupBindingKind,
-					Name:               tgb.Name,
-					UID:                tgb.UID,
-					Controller:         &isController,
-					BlockOwnerDeletion: &blockOwnerDeletion,
-				},
-			},
-		},
-		Spec: corev1.ServiceSpec{
-			Type:     corev1.ServiceTypeLoadBalancer,
-			Selector: selector,
-			Ports:    []corev1.ServicePort{port},
-		},
-	}, nil
+// targetGroupBindingStatus is fjord's typed view of a TargetGroupBinding's
+// status subresource, written by TargetGroupBindingController.reconcile and
+// read back by decodeTargetGroupBindingStatus to detect a no-op update.
+type targetGroupBindingStatus struct {
+	ObservedGeneration int64    `json:"observedGeneration"`
+	Targets            []target `json:"targets"`
+	TargetType         string   `json:"targetType"`
 }
 
 // resolveServicePort returns the ServicePort on service that ref
@@ -186,4 +155,181 @@ func resolveServicePort(service *corev1.Service, ref intstr.IntOrString) (corev1
 	}
 
 	return corev1.ServicePort{}, fmt.Errorf("service %s/%s has no port %q: %w", service.Namespace, service.Name, ref.String(), ErrServicePortNotFound)
+}
+
+// effectiveTargetType returns tgb.Spec.TargetType, defaulting to
+// targetTypeIP when it is empty -- matching the upstream
+// elbv2.k8s.aws/v1beta1 CRD's own default.
+func effectiveTargetType(tgb *targetGroupBinding) string {
+	if tgb.Spec.TargetType == "" {
+		return targetTypeIP
+	}
+
+	return tgb.Spec.TargetType
+}
+
+// resolveTargets resolves tgb's targets from service, matching a real ALB's
+// targetType semantics: ip (see resolveIPTargets) registers pod IPs
+// directly, instance (see resolveInstanceTargets) registers node addresses
+// via the Service's nodePort. It returns the resolved targets sorted by
+// address then port (see sortTargets), so repeated reconciles that resolve
+// the same target set never churn the TargetGroupBinding's status, along
+// with the effective targetType (the "ip" default already applied; see
+// effectiveTargetType).
+func resolveTargets(tgb *targetGroupBinding, service *corev1.Service, endpointSlices []*discoveryv1.EndpointSlice, nodes []*corev1.Node) ([]target, string, error) {
+	targetType := effectiveTargetType(tgb)
+
+	var (
+		targets []target
+		err     error
+	)
+
+	switch targetType {
+	case targetTypeInstance:
+		targets, err = resolveInstanceTargets(service, tgb.Spec.ServiceRef.Port, nodes)
+	default:
+		targets, err = resolveIPTargets(service, tgb.Spec.ServiceRef.Port, endpointSlices)
+	}
+
+	if err != nil {
+		return nil, targetType, err
+	}
+
+	sortTargets(targets)
+
+	return targets, targetType, nil
+}
+
+// resolveIPTargets resolves targetType ip's targets: every Ready endpoint
+// address across endpointSlices (the referenced service's own
+// EndpointSlices, selected by the discoveryv1.LabelServiceName label; see
+// TargetGroupBindingController.reconcile), paired with the container port
+// each EndpointSlice assigns the name portRef resolves to on service (see
+// resolveServicePort and endpointSlicePort).
+//
+// It returns an error wrapping ErrSelectorlessService if service carries no
+// selector, or ErrServicePortNotFound if portRef does not match any of
+// service's ports.
+func resolveIPTargets(service *corev1.Service, portRef intstr.IntOrString, endpointSlices []*discoveryv1.EndpointSlice) ([]target, error) {
+	if len(service.Spec.Selector) == 0 {
+		return nil, fmt.Errorf("service %s/%s: %w", service.Namespace, service.Name, ErrSelectorlessService)
+	}
+
+	port, err := resolveServicePort(service, portRef)
+	if err != nil {
+		return nil, err
+	}
+
+	targets := make([]target, 0)
+
+	for _, slice := range endpointSlices {
+		containerPort, ok := endpointSlicePort(slice, port.Name)
+		if !ok {
+			continue
+		}
+
+		for _, ep := range slice.Endpoints {
+			if !endpointReady(&ep) {
+				continue
+			}
+
+			for _, addr := range ep.Addresses {
+				targets = append(targets, target{Address: addr, Port: containerPort})
+			}
+		}
+	}
+
+	return targets, nil
+}
+
+// resolveInstanceTargets resolves targetType instance's targets: every
+// distinct node address (see nodeAddress, shared with
+// LoadBalancerController) paired with the nodePort portRef resolves to on
+// service (see resolveServicePort).
+//
+// It returns an error wrapping ErrUnsupportedServiceType if service is
+// neither type: NodePort nor type: LoadBalancer (the only two Service
+// types the API server allocates a nodePort for), or ErrServicePortNotFound
+// if portRef does not match any of service's ports.
+func resolveInstanceTargets(service *corev1.Service, portRef intstr.IntOrString, nodes []*corev1.Node) ([]target, error) {
+	if service.Spec.Type != corev1.ServiceTypeNodePort && service.Spec.Type != corev1.ServiceTypeLoadBalancer {
+		return nil, fmt.Errorf("service %s/%s: %w", service.Namespace, service.Name, ErrUnsupportedServiceType)
+	}
+
+	port, err := resolveServicePort(service, portRef)
+	if err != nil {
+		return nil, err
+	}
+
+	targets := make([]target, 0, len(nodes))
+
+	if port.NodePort == 0 {
+		return targets, nil
+	}
+
+	seen := make(map[string]struct{}, len(nodes))
+
+	for _, node := range nodes {
+		addr := nodeAddress(node)
+		if addr == "" {
+			continue
+		}
+
+		if _, ok := seen[addr]; ok {
+			continue
+		}
+
+		seen[addr] = struct{}{}
+
+		targets = append(targets, target{Address: addr, Port: port.NodePort})
+	}
+
+	return targets, nil
+}
+
+// endpointSlicePort returns the port number slice.Ports assigns to the port
+// named portName (service's own resolved port name -- "" for a Service
+// with a single, unnamed port), and whether one was found. A slice with no
+// matching port (e.g. because it backs a different, unrelated Service port)
+// contributes no targets.
+func endpointSlicePort(slice *discoveryv1.EndpointSlice, portName string) (int32, bool) {
+	for _, p := range slice.Ports {
+		name := ""
+		if p.Name != nil {
+			name = *p.Name
+		}
+
+		if name != portName {
+			continue
+		}
+
+		if p.Port == nil {
+			return 0, false
+		}
+
+		return *p.Port, true
+	}
+
+	return 0, false
+}
+
+// endpointReady reports whether ep should be treated as ready to receive
+// traffic. discoveryv1.EndpointConditions.Ready's zero value is nil, which
+// upstream defines as "true" for backward compatibility, not "false", so a
+// nil condition counts as ready.
+func endpointReady(ep *discoveryv1.Endpoint) bool {
+	return ep.Conditions.Ready == nil || *ep.Conditions.Ready
+}
+
+// sortTargets sorts targets by address then port in place, so
+// resolveTargets returns a deterministic order and repeated reconciles that
+// resolve the same target set produce byte-identical status.targets.
+func sortTargets(targets []target) {
+	sort.Slice(targets, func(i, j int) bool {
+		if targets[i].Address != targets[j].Address {
+			return targets[i].Address < targets[j].Address
+		}
+
+		return targets[i].Port < targets[j].Port
+	})
 }

@@ -105,6 +105,40 @@ func TestTargetGroupBindingCRDObjectSpecSchema(t *testing.T) {
 	}
 }
 
+func TestTargetGroupBindingCRDObjectStatusSchema(t *testing.T) {
+	t.Parallel()
+
+	obj := mustTargetGroupBindingCRDObject(t)
+
+	versions, _, err := unstructured.NestedSlice(obj.Object, "spec", "versions")
+	if err != nil || len(versions) != 1 {
+		t.Fatalf("spec.versions: %v, %v", versions, err)
+	}
+
+	version, ok := versions[0].(map[string]any)
+	if !ok {
+		t.Fatalf("spec.versions[0] type = %T, want map[string]any", versions[0])
+	}
+
+	assertNestedTrue(t, version, statusFieldPath("x-kubernetes-preserve-unknown-fields")...)
+	assertNestedString(t, version, "integer", statusFieldPath("properties", "observedGeneration", "type")...)
+	assertNestedString(t, version, "array", statusFieldPath("properties", "targets", "type")...)
+	assertNestedString(t, version, "string", statusFieldPath("properties", "targets", "items", "properties", "address", "type")...)
+	assertNestedString(t, version, "integer", statusFieldPath("properties", "targets", "items", "properties", "port", "type")...)
+
+	targetTypeEnum, found, err := unstructured.NestedSlice(version, statusFieldPath("properties", "targetType", "enum")...)
+	if err != nil || !found || len(targetTypeEnum) != 2 {
+		t.Fatalf("status.targetType.enum = %v, %v, %v, want exactly 2 entries", targetTypeEnum, found, err)
+	}
+}
+
+// statusFieldPath returns the openAPIV3Schema path to TargetGroupBinding's
+// status property, with more appended -- freshly allocated on every call so
+// callers can never alias each other's slice.
+func statusFieldPath(more ...string) []string {
+	return append([]string{"schema", "openAPIV3Schema", "properties", "status"}, more...)
+}
+
 // mustTargetGroupBindingCRDObject builds the CRD object, failing the test on
 // error.
 func mustTargetGroupBindingCRDObject(t *testing.T) *unstructured.Unstructured {

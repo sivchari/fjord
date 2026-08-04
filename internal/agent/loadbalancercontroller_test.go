@@ -74,8 +74,9 @@ var loadBalancerReconcileTestCases = []loadBalancerReconcileTestCase{
 	},
 }
 
-// ptr returns a pointer to v, for building loadBalancerClass values inline.
-func ptr(v string) *string { return &v }
+// ptr returns a pointer to v, for building loadBalancerClass values (and,
+// in targetgroupbinding_test.go, discoveryv1 EndpointSlice fields) inline.
+func ptr[T any](v T) *T { return &v }
 
 func TestDesiredIngress(t *testing.T) {
 	t.Parallel()
