@@ -1,12 +1,15 @@
-// Package authn stages the host-side files fjord's control-plane
-// authentication token webhook needs before a cluster is created: the
-// authenticator's TLS serving certificate and the webhook kubeconfig
-// kube-apiserver calls. Stage writes these under a host directory;
-// internal/provider.Config.ExtraMounts delivers them into the node before
-// the API server starts, and internal/provider.Config.AuthWebhook
-// configures kubeadm to call the authenticator. The authenticator itself
-// runs as a DaemonSet (cluster.EnsureAuthenticator), created after the
-// cluster comes up.
+// Package authn stages what fjord's control-plane authentication token
+// webhook needs before a cluster is created: the webhook kubeconfig
+// kube-apiserver calls, and the authenticator's TLS serving certificate.
+// Stage writes the webhook kubeconfig under a host directory;
+// internal/provider.Config.ExtraMounts delivers it into the node before the
+// API server starts, and internal/provider.Config.AuthWebhook configures
+// kubeadm to call the authenticator. The TLS certificate is not written to
+// that directory: unlike the webhook kubeconfig, it is not needed on the
+// node itself, only by the authenticator pod, which cluster.EnsureAuthenticator
+// delivers it to via a Secret built from StagedAuthn.Cert. The authenticator
+// itself runs as a DaemonSet (cluster.EnsureAuthenticator), created after
+// the cluster comes up.
 package authn
 
 import (
@@ -24,17 +27,14 @@ import (
 
 const (
 	// authnDirName is the subdirectory of baseDir (see Stage) holding the
-	// authenticator's TLS material and webhook kubeconfig.
+	// webhook kubeconfig.
 	authnDirName = "authn"
 
 	// nodeAuthnDir is where the authn subdirectory is delivered inside the
 	// cluster, matching provider.AuthWebhook.VolumeMountPath and the
-	// ConfigFilePath's parent directory. The authenticator DaemonSet also
-	// hostPath-mounts it for its TLS material.
+	// ConfigFilePath's parent directory.
 	nodeAuthnDir = "/etc/fjord/authn"
 
-	tlsCertFileName = "tls.crt"
-	tlsKeyFileName  = "tls.key"
 	webhookFileName = "webhook.yaml"
 
 	// authenticatorPort is the port the authenticator listens on, reachable
@@ -57,17 +57,14 @@ const (
 	authnKubeconfigName = "fjord-authenticator"
 
 	authnDirMode = 0o755
-	tlsCertMode  = 0o644
-	tlsKeyMode   = 0o600
 )
 
-// StagedAuthn is the result of Stage: the host directory holding the
-// authenticator's staged files, the provider.Mounts delivering them to the
-// control-plane node, and the provider.AuthWebhook configuring kubeadm to
-// call the authenticator.
+// StagedAuthn is the result of Stage: the host directory holding the staged
+// webhook kubeconfig, the provider.Mounts delivering it to the control-plane
+// node, the provider.AuthWebhook configuring kubeadm to call the
+// authenticator, and the authenticator's TLS serving certificate.
 type StagedAuthn struct {
-	// Dir is the host directory holding tls.crt, tls.key, and
-	// webhook.yaml (baseDir/authn).
+	// Dir is the host directory holding webhook.yaml (baseDir/authn).
 	Dir string
 	// Mounts are the provider.Mounts delivering Dir to the control-plane
 	// node.
@@ -75,19 +72,26 @@ type StagedAuthn struct {
 	// Webhook configures kubeadm's apiserver authentication token webhook
 	// to call the authenticator via the mounted webhook.yaml.
 	Webhook *provider.AuthWebhook
+	// Cert is the authenticator's TLS serving certificate, issued from ca.
+	// It is not staged to disk: cluster.EnsureAuthenticator stores it in a
+	// Secret the authenticator DaemonSet mounts.
+	Cert *pki.ServerCert
 }
 
-// Stage writes the authenticator's TLS certificate and webhook kubeconfig
-// under baseDir, and returns the provider.Mounts and provider.AuthWebhook
-// wiring them into a cluster not yet created. ca issues the authenticator's
-// serving certificate (the same CA the webhook kubeconfig trusts).
+// Stage writes the webhook kubeconfig under baseDir and issues the
+// authenticator's TLS serving certificate, returning the provider.Mounts and
+// provider.AuthWebhook wiring the former into a cluster not yet created,
+// alongside the latter for cluster.EnsureAuthenticator to deliver via a
+// Secret. ca issues the certificate (the same CA the webhook kubeconfig
+// trusts).
 func Stage(baseDir string, ca *pki.CA) (*StagedAuthn, error) {
 	dir := filepath.Join(baseDir, authnDirName)
 	if err := os.MkdirAll(dir, authnDirMode); err != nil {
 		return nil, fmt.Errorf("create authn staging directory %q: %w", dir, err)
 	}
 
-	if err := stageTLS(dir, ca); err != nil {
+	cert, err := issueAuthenticatorCert(ca)
+	if err != nil {
 		return nil, err
 	}
 
@@ -104,13 +108,14 @@ func Stage(baseDir string, ca *pki.CA) (*StagedAuthn, error) {
 			ConfigFilePath:  nodeAuthnDir + "/" + webhookFileName,
 			VolumeMountPath: nodeAuthnDir,
 		},
+		Cert: cert,
 	}, nil
 }
 
 // Cleanup removes the directory tree Stage created under baseDir (the
 // parent of s.Dir). Callers must only call this once the cluster it was
-// staged for no longer exists: the TLS material must remain in place on the
-// host for the lifetime of the control-plane node's bind mounts.
+// staged for no longer exists: the webhook kubeconfig must remain in place
+// on the host for the lifetime of the control-plane node's bind mounts.
 func (s *StagedAuthn) Cleanup() error {
 	if err := os.RemoveAll(filepath.Dir(s.Dir)); err != nil {
 		return fmt.Errorf("remove authn staging directory: %w", err)
@@ -119,23 +124,16 @@ func (s *StagedAuthn) Cleanup() error {
 	return nil
 }
 
-// stageTLS issues the authenticator's TLS serving certificate from ca and
-// writes it to dir/tls.crt and dir/tls.key.
-func stageTLS(dir string, ca *pki.CA) error {
+// issueAuthenticatorCert issues the authenticator's TLS serving certificate
+// from ca, valid for authenticatorServerName, the hostname the webhook
+// kubeconfig dials.
+func issueAuthenticatorCert(ca *pki.CA) (*pki.ServerCert, error) {
 	cert, err := ca.IssueServerCert(cluster.AuthenticatorServiceAccountName, []string{authenticatorServerName})
 	if err != nil {
-		return fmt.Errorf("issue authenticator server certificate: %w", err)
+		return nil, fmt.Errorf("issue authenticator server certificate: %w", err)
 	}
 
-	if err := os.WriteFile(filepath.Join(dir, tlsCertFileName), cert.CertPEM, tlsCertMode); err != nil {
-		return fmt.Errorf("write authenticator tls certificate: %w", err)
-	}
-
-	if err := os.WriteFile(filepath.Join(dir, tlsKeyFileName), cert.KeyPEM, tlsKeyMode); err != nil {
-		return fmt.Errorf("write authenticator tls key: %w", err)
-	}
-
-	return nil
+	return cert, nil
 }
 
 // stageWebhookKubeconfig writes the kube-apiserver

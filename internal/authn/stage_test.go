@@ -70,7 +70,7 @@ func TestStage(t *testing.T) {
 	}
 
 	assertStagedDir(t, baseDir, staged)
-	assertTLSFiles(t, staged.Dir, ca)
+	assertCert(t, staged, ca)
 	assertWebhookKubeconfig(t, staged.Dir, ca)
 	assertMounts(t, staged)
 	assertWebhook(t, staged)
@@ -94,33 +94,34 @@ func assertStagedDir(t *testing.T, baseDir string, staged *authn.StagedAuthn) {
 	}
 }
 
-func assertTLSFiles(t *testing.T, dir string, ca *pki.CA) {
+// assertCert verifies staged.Cert carries a non-empty certificate and key
+// issued by ca for "localhost", and is not staged to disk under staged.Dir
+// (cluster.EnsureAuthenticator delivers it via a Secret instead).
+func assertCert(t *testing.T, staged *authn.StagedAuthn, ca *pki.CA) {
 	t.Helper()
 
-	certPEM, err := os.ReadFile(filepath.Clean(filepath.Join(dir, "tls.crt")))
-	if err != nil {
-		t.Fatalf("read tls.crt: %v", err)
+	if staged.Cert == nil {
+		t.Fatalf("Cert is nil")
 	}
 
-	keyPEM, err := os.ReadFile(filepath.Clean(filepath.Join(dir, "tls.key")))
-	if err != nil {
-		t.Fatalf("read tls.key: %v", err)
-	}
-
-	if len(certPEM) == 0 || len(keyPEM) == 0 {
-		t.Fatalf("tls.crt/tls.key must not be empty")
+	if len(staged.Cert.CertPEM) == 0 || len(staged.Cert.KeyPEM) == 0 {
+		t.Fatalf("Cert.CertPEM/Cert.KeyPEM must not be empty")
 	}
 
 	pool := certPoolFromPEM(t, ca.CertPEM)
 
-	cert := parseCertPEM(t, certPEM)
+	cert := parseCertPEM(t, staged.Cert.CertPEM)
 
 	if _, err := cert.Verify(x509VerifyOptions(pool)); err != nil {
-		t.Errorf("tls.crt does not verify against the CA: %v", err)
+		t.Errorf("Cert.CertPEM does not verify against the CA: %v", err)
 	}
 
 	if len(cert.DNSNames) == 0 || cert.DNSNames[0] != "localhost" {
-		t.Errorf("tls.crt DNSNames = %v, want [\"localhost\"]", cert.DNSNames)
+		t.Errorf("Cert.CertPEM DNSNames = %v, want [\"localhost\"]", cert.DNSNames)
+	}
+
+	if _, err := os.Stat(filepath.Join(staged.Dir, "tls.crt")); !os.IsNotExist(err) {
+		t.Errorf("tls.crt exists under staged.Dir, want it delivered only via a Secret")
 	}
 }
 

@@ -51,7 +51,7 @@ func TestExecAuthInfo(t *testing.T) {
 
 	env := execEnvMap(authInfo.Exec.Env)
 
-	wantEndpoint := fmt.Sprintf("http://localhost:%d", cluster.AgentNodePort)
+	wantEndpoint := fmt.Sprintf("http://%s:%d", cluster.AgentLoopbackHost, cluster.AgentNodePort)
 	if env["AWS_ENDPOINT_URL_STS"] != wantEndpoint {
 		t.Errorf("AWS_ENDPOINT_URL_STS = %q, want %q", env["AWS_ENDPOINT_URL_STS"], wantEndpoint)
 	}
