@@ -49,6 +49,25 @@ fjord delete cluster --name alpha
 
 The fjord-agent image is published to `ghcr.io/sivchari/fjord/agent` for all supported EKS versions (amd64/arm64).
 
+## On macOS
+
+On Apple silicon fjord runs the cluster inside a Virtualization.framework VM,
+which macOS only allows a binary that carries the
+`com.apple.security.virtualization` entitlement. The released darwin archive is
+already signed with it. A binary you build yourself is not, and the symptom is
+misleading: the VM process starts, its guest never becomes reachable, and
+minutes later fjord reports a timeout that says nothing about signing. Sign it
+before the first run:
+
+```console
+go install github.com/sivchari/fjord/cmd/fjord@latest
+codesign --entitlements vz.entitlements -f -s - "$(go env GOPATH)/bin/fjord"
+```
+
+`vz.entitlements` lives at the root of this repository. macOS also quarantines
+downloaded archives; if the released binary refuses to start, clear it with
+`xattr -d com.apple.quarantine ./fjord`.
+
 ## Running fjord inside a container
 
 fjord runs the control plane as host processes in whatever network namespace it is

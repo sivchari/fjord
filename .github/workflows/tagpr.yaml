@@ -38,7 +38,11 @@ jobs:
   goreleaser:
     needs: tagpr
     if: needs.tagpr.outputs.tagpr-tag != ''
-    runs-on: ubuntu-latest
+    # macOS: the darwin build needs cgo (rask binds Virtualization.framework)
+    # and a codesign step, and linux cross-compiles from here with
+    # CGO_ENABLED=0, so one runner produces every artifact and one checksum
+    # file covers them all.
+    runs-on: macos-latest
     permissions:
       contents: write
       packages: write

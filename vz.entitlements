@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- rask's vz substrate creates a Virtualization.framework VM to run the
+	     cluster on macOS. Without this entitlement the VM process starts but
+	     its guest never comes up, and rask fails minutes later with a
+	     "guest agent did not become healthy" timeout that says nothing about
+	     the real cause. See the codesign step in .goreleaser.yml. -->
+	<key>com.apple.security.virtualization</key>
+	<true/>
+</dict>
+</plist>
