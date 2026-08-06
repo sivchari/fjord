@@ -3,7 +3,6 @@ package rask
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 
 	raskcluster "github.com/sivchari/rask/pkg/cluster"
 
@@ -19,9 +18,11 @@ type provider struct {
 var _ clusterprovider.Provider = (*provider)(nil)
 
 // NewProvider returns a clusterprovider.Provider backed by rask, storing
-// cluster state under rask's own default home directory.
+// cluster state under rask's own default home directory. It hands rask the
+// rask-init binary embedded at build time (see raskinit.go), which rask
+// boots as PID 1 inside the VM it runs a macOS cluster in.
 func NewProvider() (clusterprovider.Provider, error) {
-	inner, err := raskcluster.NewProvider("")
+	inner, err := raskcluster.NewProvider("", raskcluster.WithRaskInit(raskInit))
 	if err != nil {
 		return nil, fmt.Errorf("new rask provider: %w", err)
 	}
@@ -68,13 +69,12 @@ func (p *provider) applyConfig(name string, c *clusterprovider.Config, createOpt
 	}
 
 	if c.AuthWebhook != nil {
-		dataDir := filepath.Join(filepath.Dir(p.inner.KubeConfigPath(name)), "data")
-
-		arg, err := authWebhookArg(c.AuthWebhook, c.ExtraMounts, dataDir)
+		dest, err := authWebhookDest(c.AuthWebhook, c.ExtraMounts)
 		if err != nil {
 			return err
 		}
 
+		arg := authWebhookConfigFileArg + "=" + p.inner.PrebootPath(name, dest)
 		createOpts.ExtraAPIServerArgs = append(createOpts.ExtraAPIServerArgs, arg)
 	}
 

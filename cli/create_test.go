@@ -68,35 +68,24 @@ func TestValidateCreateClusterOptions(t *testing.T) {
 	tests := []struct {
 		name    string
 		opts    *createClusterOptions
-		goos    string
 		wantErr bool
 	}{
 		{
-			name: "linux is fine",
+			name: "auth enabled is fine on every platform",
 			opts: &createClusterOptions{enableAuth: true},
-			goos: "linux",
 		},
 		{
-			name: "darwin with auth disabled is fine",
+			name: "auth disabled is fine",
 			opts: &createClusterOptions{enableAuth: false},
-			goos: "darwin",
-		},
-		{
-			name:    "darwin with auth enabled is rejected",
-			opts:    &createClusterOptions{enableAuth: true},
-			goos:    "darwin",
-			wantErr: true,
 		},
 		{
 			name:    "--with-loadbalancer without --enable-auth is rejected",
 			opts:    &createClusterOptions{enableAuth: false, withLoadBalancer: true},
-			goos:    "linux",
 			wantErr: true,
 		},
 		{
 			name: "--with-loadbalancer with --enable-auth is fine",
 			opts: &createClusterOptions{enableAuth: true, withLoadBalancer: true},
-			goos: "linux",
 		},
 	}
 
@@ -104,7 +93,7 @@ func TestValidateCreateClusterOptions(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			err := validateCreateClusterOptions(tt.opts, tt.goos)
+			err := validateCreateClusterOptions(tt.opts)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("validateCreateClusterOptions() error = %v, wantErr %v", err, tt.wantErr)
 			}

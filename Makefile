@@ -1,4 +1,4 @@
-.PHONY: build test test-integration lint lint-fix fmt fmt-diff generate clean tools mod
+.PHONY: build rask-init test test-integration lint lint-fix fmt fmt-diff generate clean tools mod
 
 BINARY_NAME=fjord
 VERSION?=$(shell grep 'const Version' version.go | cut -d'"' -f2)
@@ -6,6 +6,20 @@ BUILD_DIR=bin
 GOLANGCI_LINT=go tool -modfile tools/go.mod golangci-lint
 GOTOOLCHAIN=go1.26.3
 export GOTOOLCHAIN
+
+RASK_INIT_EMBED=internal/rask/embedded/rask-init
+
+# rask-init cross-compiles the VM's PID 1 over the checked-in placeholder.
+# Only macOS clusters boot it; rask cannot ship it inside its own module, so
+# fjord embeds it and hands it over via raskcluster.WithRaskInit.
+#
+# It builds through raskinit/go.mod, not fjord's own: rask-init imports
+# packages fjord never does, and `go mod tidy` on the main module prunes
+# them. Writing to a temp file first keeps the checked-in placeholder intact
+# when the build fails -- go:embed has nothing to embed otherwise.
+rask-init:
+	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -modfile raskinit/go.mod -ldflags="-s -w" -o $(RASK_INIT_EMBED).tmp github.com/sivchari/rask/cmd/rask-init
+	mv $(RASK_INIT_EMBED).tmp $(RASK_INIT_EMBED)
 
 # Build
 build:

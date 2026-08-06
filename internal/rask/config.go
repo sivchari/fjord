@@ -99,31 +99,33 @@ func prebootFiles(mounts []clusterprovider.Mount) ([]raskcluster.PrebootFile, er
 	return files, nil
 }
 
-// authWebhookArg builds the ExtraAPIServerArgs entry wiring kube-apiserver
-// to w's webhook config file, given the same mounts prebootFiles staged and
-// dataDir (the cluster's data directory, computed from
-// raskcluster.Provider.KubeConfigPath before Create runs — see
-// raskcluster's Example_fjordIntegration).
+// authWebhookDest locates the preboot destination (a PrebootFile.Dest, i.e.
+// relative to the cluster's preboot directory) of the webhook kubeconfig
+// kube-apiserver must read.
 //
 // w.ConfigFilePath is a path inside the API server container's mount
-// vocabulary; it locates the owning mount by matching
-// w.VolumeMountPath (the directory that path is documented to live under)
-// against each mount's ContainerPath, then rebuilds the equivalent rask
-// preboot path using the same mountDestPrefix scheme prebootFiles used for
-// that mount. An unmatched VolumeMountPath is reported as an error rather
-// than guessed at, since it means Config.AuthWebhook and Config.ExtraMounts
-// disagree about where the config file lives.
-func authWebhookArg(w *clusterprovider.AuthWebhook, mounts []clusterprovider.Mount, dataDir string) (string, error) {
+// vocabulary; it locates the owning mount by matching w.VolumeMountPath
+// (the directory that path is documented to live under) against each
+// mount's ContainerPath, then rebuilds the equivalent dest using the same
+// mountDestPrefix scheme prebootFiles used for that mount. An unmatched
+// VolumeMountPath is reported as an error rather than guessed at, since it
+// means Config.AuthWebhook and Config.ExtraMounts disagree about where the
+// config file lives.
+//
+// Turning that dest into a path the API server can actually open is rask's
+// job (Provider.PrebootPath): it is a host path under hostproc, where the
+// host is the node, and an in-guest path under vz, where it is not.
+// Computing it here would bake in the hostproc answer and hand the vz guest
+// a macOS path it cannot open.
+func authWebhookDest(w *clusterprovider.AuthWebhook, mounts []clusterprovider.Mount) (string, error) {
 	for i, m := range mounts {
 		if m.ContainerPath != w.VolumeMountPath {
 			continue
 		}
 
 		rel := strings.TrimPrefix(strings.TrimPrefix(w.ConfigFilePath, w.VolumeMountPath), "/")
-		dest := path.Join(mountDestPrefix(i), filepath.ToSlash(rel))
-		abs := filepath.Join(dataDir, "preboot", filepath.FromSlash(dest))
 
-		return authWebhookConfigFileArg + "=" + abs, nil
+		return path.Join(mountDestPrefix(i), filepath.ToSlash(rel)), nil
 	}
 
 	return "", fmt.Errorf("auth webhook config file %q: no extra mount with container path %q", w.ConfigFilePath, w.VolumeMountPath)

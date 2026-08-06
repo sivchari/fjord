@@ -2,7 +2,7 @@
 
 fjord runs an EKS-compatible Kubernetes cluster on your local machine, built on [rask](https://github.com/sivchari/rask).
 
-Manifests written for Amazon EKS apply as-is: on Linux, the control plane is built from [EKS Distro](https://distro.eks.amazonaws.com/) (the Kubernetes distribution used by Amazon EKS), so the cluster reports an EKS version string and runs the same patched components as a real EKS cluster. On macOS, rask's vz substrate does not yet support EKS Distro component overrides, so the control plane runs upstream Kubernetes instead; fjord's AWS emulation layer (IRSA, IMDS, EKS Pod Identity, access-entry authentication) still works there.
+Manifests written for Amazon EKS apply as-is. The control plane is built from [EKS Distro](https://distro.eks.amazonaws.com/) (the Kubernetes distribution used by Amazon EKS), so the cluster reports an EKS version string and runs the same patched components as a real EKS cluster, on both Linux and macOS.
 
 ```console
 $ fjord create cluster --eks-version 1.33
@@ -51,22 +51,40 @@ The fjord-agent image is published to `ghcr.io/sivchari/fjord/agent` for all sup
 
 ## On macOS
 
-On Apple silicon fjord runs the cluster inside a Virtualization.framework VM,
-which macOS only allows a binary that carries the
-`com.apple.security.virtualization` entitlement. The released darwin archive is
-already signed with it. A binary you build yourself is not, and the symptom is
-misleading: the VM process starts, its guest never becomes reachable, and
-minutes later fjord reports a timeout that says nothing about signing. Sign it
-before the first run:
+Use the released darwin archive. It is the only build that works out of the
+box, and `go install` is effectively Linux-only here.
+
+Two things a macOS cluster needs are settled at build time, not run time:
+
+- **The virtualization entitlement.** fjord runs the cluster inside a
+  Virtualization.framework VM, which macOS only permits for a binary signed
+  with `com.apple.security.virtualization`. The released archive is signed;
+  anything you build yourself is not.
+- **The VM's PID 1.** rask boots a small `rask-init` binary inside the VM.
+  It cannot ship inside rask's Go module, so fjord compiles and embeds it
+  during its own build. The copy checked into this repository is a
+  placeholder.
+
+Neither is a silent failure: an unsigned binary stops in under two seconds
+naming the `codesign` command to run, and a placeholder `rask-init` is
+rejected when the provider is constructed. Both used to surface minutes later
+as an unexplained VM timeout instead.
+
+If you do want to build it yourself, do both steps:
 
 ```console
-go install github.com/sivchari/fjord/cmd/fjord@latest
-codesign --entitlements vz.entitlements -f -s - "$(go env GOPATH)/bin/fjord"
+git clone https://github.com/sivchari/fjord && cd fjord
+make rask-init                                   # cross-compiles the VM's PID 1
+go build -o fjord ./cmd/fjord
+codesign --entitlements vz.entitlements -f -s - ./fjord
 ```
 
-`vz.entitlements` lives at the root of this repository. macOS also quarantines
-downloaded archives; if the released binary refuses to start, clear it with
-`xattr -d com.apple.quarantine ./fjord`.
+macOS also quarantines downloaded archives; if the released binary refuses to
+start, clear it with `xattr -d com.apple.quarantine ./fjord`.
+
+On Linux none of this applies -- `go install github.com/sivchari/fjord/cmd/fjord@latest`
+is enough, since rask runs the control plane as host processes with no VM,
+no entitlement and no `rask-init` involved.
 
 ## Running fjord inside a container
 

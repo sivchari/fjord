@@ -37,6 +37,11 @@ builds:
     ldflags:
       - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}}
     hooks:
+      pre:
+        # Replace the checked-in rask-init placeholder with the real
+        # linux/arm64 binary before this build embeds it (see
+        # internal/rask/raskinit.go).
+        - make rask-init
       post:
         # Ad-hoc sign with com.apple.security.virtualization. Without it the
         # VM starts but its guest never becomes reachable, and the failure

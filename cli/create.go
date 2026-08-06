@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -26,11 +25,6 @@ import (
 )
 
 const defaultClusterName = "fjord"
-
-// goosDarwin is runtime.GOOS's value on macOS, compared against the goos
-// injected into validateCreateClusterOptions/buildClusterConfig/
-// buildCreateOptions for the darwin gating those functions apply.
-const goosDarwin = "darwin"
 
 func newCreateCmd(logger logger.Logger) *cobra.Command {
 	cmd := &cobra.Command{
@@ -88,21 +82,9 @@ func newCreateClusterCmd(logger logger.Logger) *cobra.Command {
 	return cmd
 }
 
-// darwinControlPlaneWarning is logged when a cluster is created on macOS:
-// rask's vz substrate does not yet support ComponentDir or a CoreDNS image
-// override (see buildCreateOptions/buildClusterConfig), so the control
-// plane it boots is upstream Kubernetes rather than EKS Distro.
-const darwinControlPlaneWarning = "running on macOS: rask's vz substrate does not yet support EKS Distro component overrides, so this cluster's control plane is upstream Kubernetes, not EKS Distro, until that support lands"
-
 func runCreateCluster(ctx context.Context, logger logger.Logger, opts *createClusterOptions) error {
-	goos := runtime.GOOS
-
-	if err := validateCreateClusterOptions(opts, goos); err != nil {
+	if err := validateCreateClusterOptions(opts); err != nil {
 		return err
-	}
-
-	if goos == goosDarwin {
-		logger.Warn(darwinControlPlaneWarning)
 	}
 
 	release, err := resolveEKSRelease(opts)
@@ -110,7 +92,7 @@ func runCreateCluster(ctx context.Context, logger logger.Logger, opts *createClu
 		return err
 	}
 
-	config, ca, authenticatorCert, err := buildClusterConfig(opts, release, goos)
+	config, ca, authenticatorCert, err := buildClusterConfig(opts, release)
 	if err != nil {
 		return err
 	}
@@ -122,7 +104,7 @@ func runCreateCluster(ctx context.Context, logger logger.Logger, opts *createClu
 		return err
 	}
 
-	createOpts, err := buildCreateOptions(ctx, logger, opts, config, release, goos)
+	createOpts, err := buildCreateOptions(ctx, logger, opts, config, release)
 	if err != nil {
 		return err
 	}
@@ -173,17 +155,11 @@ func resolveEKSRelease(opts *createClusterOptions) (*eksd.Release, error) {
 
 // buildCreateOptions builds the clusterprovider.CreateOptions for opts,
 // materializing a component directory from release's EKS-D server tarball
-// for rask to run the cluster's nodes from. On darwin, rask's vz substrate
-// does not yet support ComponentDir (see the package doc), so this is
-// skipped and the cluster runs upstream Kubernetes instead.
-func buildCreateOptions(ctx context.Context, logger logger.Logger, opts *createClusterOptions, config *clusterprovider.Config, release *eksd.Release, goos string) (clusterprovider.CreateOptions, error) {
+// for rask to run the cluster's nodes from, on every platform rask supports.
+func buildCreateOptions(ctx context.Context, logger logger.Logger, opts *createClusterOptions, config *clusterprovider.Config, release *eksd.Release) (clusterprovider.CreateOptions, error) {
 	createOpts := clusterprovider.CreateOptions{
 		Config:       config,
 		WaitForReady: opts.wait,
-	}
-
-	if goos == goosDarwin {
-		return createOpts, nil
 	}
 
 	componentDir, err := componentdir.Materialize(ctx, release, buildArch())
@@ -213,19 +189,10 @@ func clusterReadyMessage(opts *createClusterOptions) string {
 }
 
 // validateCreateClusterOptions rejects create cluster requests fjord cannot
-// satisfy. goos is injected (rather than reading runtime.GOOS internally)
-// so the darwin gating is unit-testable.
-func validateCreateClusterOptions(opts *createClusterOptions, goos string) error {
+// satisfy.
+func validateCreateClusterOptions(opts *createClusterOptions) error {
 	if opts.withLoadBalancer && !opts.enableAuth {
 		return errors.New("--with-loadbalancer requires --enable-auth: fjord's LoadBalancer controller runs inside fjord-agent, which is only deployed when authentication is enabled (decoupling agent deployment from --enable-auth is follow-up work)")
-	}
-
-	if goos != goosDarwin {
-		return nil
-	}
-
-	if opts.enableAuth {
-		return errors.New("--enable-auth is not supported on macOS: fjord's authentication webhook requires an apiserver flag (ExtraAPIServerArgs), which rask's vz substrate does not support yet; use --enable-auth=false on macOS for now")
 	}
 
 	return nil
@@ -288,21 +255,16 @@ func applyEKSDefaultState(ctx context.Context, logger logger.Logger, provider cl
 // deployAgent/deployAuthenticator to populate the Secret
 // cluster.EnsureAuthenticator's DaemonSet mounts, so the pod serves the same
 // certificate the webhook kubeconfig's SANs and trust were computed against.
-// On darwin, the CoreDNS image override is skipped: rask's vz substrate does
-// not yet support it (see buildCreateOptions's ComponentDir gating for the
-// same reason).
-func buildClusterConfig(opts *createClusterOptions, release *eksd.Release, goos string) (*clusterprovider.Config, *pki.CA, *pki.ServerCert, error) {
+func buildClusterConfig(opts *createClusterOptions, release *eksd.Release) (*clusterprovider.Config, *pki.CA, *pki.ServerCert, error) {
 	config := &clusterprovider.Config{
 		Name:        opts.name,
 		KubeVersion: release.KubeVersion,
 	}
 
-	if goos != goosDarwin {
-		// The full repository path is passed through: rask joins
-		// repository:tag verbatim, unlike kubeadm, which appended the
-		// image name to a parent path itself.
-		config.CoreDNSImageRepository, config.CoreDNSImageTag = splitImageRef(release.CoreDNSImage)
-	}
+	// The full repository path is passed through: rask joins repository:tag
+	// verbatim, unlike kubeadm, which appended the image name to a parent
+	// path itself.
+	config.CoreDNSImageRepository, config.CoreDNSImageTag = splitImageRef(release.CoreDNSImage)
 
 	if !opts.enableAuth {
 		return config, nil, nil, nil
