@@ -6,15 +6,15 @@ before:
   hooks:
     - go mod tidy
 
+# Both builds run on a macOS runner: darwin needs cgo (rask binds
+# Virtualization.framework) and a codesign step, while linux cross-compiles
+# from there for free with CGO_ENABLED=0.
 builds:
-  - id: fjord
+  - id: fjord-linux
     main: ./cmd/fjord
     binary: fjord
     env:
       - CGO_ENABLED=0
-    # linux only: the rask dependency binds Virtualization.framework via cgo
-    # on darwin (Apple silicon only), which cannot be cross-compiled from the
-    # linux release runner. macOS users: go install (cgo builds locally).
     goos:
       - linux
     goarch:
@@ -22,6 +22,31 @@ builds:
       - arm64
     ldflags:
       - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}}
+
+  - id: fjord-darwin
+    main: ./cmd/fjord
+    binary: fjord
+    # cgo: rask's vz substrate calls Virtualization.framework, so this only
+    # builds on macOS and only for Apple silicon.
+    env:
+      - CGO_ENABLED=1
+    goos:
+      - darwin
+    goarch:
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}}
+    hooks:
+      pre:
+        # Replace the checked-in rask-init placeholder with the real
+        # linux/arm64 binary before this build embeds it (see
+        # internal/rask/raskinit.go).
+        - make rask-init
+      post:
+        # Ad-hoc sign with com.apple.security.virtualization. Without it the
+        # VM starts but its guest never becomes reachable, and the failure
+        # surfaces minutes later as an unrelated-looking timeout.
+        - codesign --entitlements vz.entitlements -f -s - "{{ .Path }}"
 
 archives:
   - id: fjord
@@ -31,7 +56,8 @@ archives:
       - LICENSE
       - README.md
     ids:
-      - fjord
+      - fjord-linux
+      - fjord-darwin
 
 checksum:
   name_template: "{{ .ProjectName }}_{{ .Version }}_checksums.txt"

@@ -173,20 +173,21 @@ func TestPrebootFiles_MultipleMountsDisambiguated(t *testing.T) {
 	}
 }
 
-func TestAuthWebhookArg(t *testing.T) {
-	t.Parallel()
+// authWebhookDestCase is one TestAuthWebhookDest case.
+type authWebhookDestCase struct {
+	name    string
+	webhook *clusterprovider.AuthWebhook
+	mounts  []clusterprovider.Mount
+	want    string
+	wantErr bool
+}
 
-	dataDir := filepath.FromSlash("/home/fjord/clusters/fjord/data")
-
-	tests := []struct {
-		name    string
-		webhook *clusterprovider.AuthWebhook
-		mounts  []clusterprovider.Mount
-		want    string
-		wantErr bool
-	}{
+// authWebhookDestCases returns TestAuthWebhookDest's table, split out so the
+// test function itself stays short.
+func authWebhookDestCases() []authWebhookDestCase {
+	return []authWebhookDestCase{
 		{
-			name: "matching mount computes the preboot path",
+			name: "matching mount resolves to its preboot dest",
 			webhook: &clusterprovider.AuthWebhook{
 				ConfigFilePath:  "/etc/fjord/authn/webhook.yaml",
 				VolumeMountPath: "/etc/fjord/authn",
@@ -194,7 +195,7 @@ func TestAuthWebhookArg(t *testing.T) {
 			mounts: []clusterprovider.Mount{
 				{HostPath: "/host/authn", ContainerPath: "/etc/fjord/authn"},
 			},
-			want: authWebhookConfigFileArg + "=" + filepath.Join(dataDir, "preboot", "mount0", "webhook.yaml"),
+			want: "mount0/webhook.yaml",
 		},
 		{
 			name: "second mount uses its own index prefix",
@@ -206,7 +207,18 @@ func TestAuthWebhookArg(t *testing.T) {
 				{HostPath: "/host/other", ContainerPath: "/etc/fjord/other"},
 				{HostPath: "/host/authn", ContainerPath: "/etc/fjord/authn"},
 			},
-			want: authWebhookConfigFileArg + "=" + filepath.Join(dataDir, "preboot", "mount1", "webhook.yaml"),
+			want: "mount1/webhook.yaml",
+		},
+		{
+			name: "nested path under the mount keeps its subdirectories",
+			webhook: &clusterprovider.AuthWebhook{
+				ConfigFilePath:  "/etc/fjord/authn/sub/webhook.yaml",
+				VolumeMountPath: "/etc/fjord/authn",
+			},
+			mounts: []clusterprovider.Mount{
+				{HostPath: "/host/authn", ContainerPath: "/etc/fjord/authn"},
+			},
+			want: "mount0/sub/webhook.yaml",
 		},
 		{
 			name: "no matching mount errors instead of guessing",
@@ -218,18 +230,22 @@ func TestAuthWebhookArg(t *testing.T) {
 			wantErr: true,
 		},
 	}
+}
 
-	for _, tt := range tests {
+func TestAuthWebhookDest(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range authWebhookDestCases() {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got, err := authWebhookArg(tt.webhook, tt.mounts, dataDir)
+			got, err := authWebhookDest(tt.webhook, tt.mounts)
 			if (err != nil) != tt.wantErr {
-				t.Fatalf("authWebhookArg() error = %v, wantErr %v", err, tt.wantErr)
+				t.Fatalf("authWebhookDest() error = %v, wantErr %v", err, tt.wantErr)
 			}
 
 			if !tt.wantErr && got != tt.want {
-				t.Errorf("authWebhookArg() = %q, want %q", got, tt.want)
+				t.Errorf("authWebhookDest() = %q, want %q", got, tt.want)
 			}
 		})
 	}
