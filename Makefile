@@ -9,17 +9,19 @@ export GOTOOLCHAIN
 
 RASK_INIT_EMBED=internal/rask/embedded/rask-init
 
-# rask-init cross-compiles the VM's PID 1 over the checked-in placeholder.
-# Only macOS clusters boot it; rask cannot ship it inside its own module, so
-# fjord embeds it and hands it over via raskcluster.WithRaskInit.
+# rask-init cross-compiles the VM's PID 1 into the embedded directory, where
+# go:embed picks it up. Only macOS clusters boot it; rask cannot ship it
+# inside its own module, so fjord embeds it and hands it over via
+# raskcluster.WithRaskInit. It is gitignored -- see
+# internal/rask/embedded/README.md.
 #
 # It builds through raskinit/go.mod, not fjord's own: rask-init imports
 # packages fjord never does, and `go mod tidy` on the main module prunes
-# them. Writing to a temp file first keeps the checked-in placeholder intact
-# when the build fails -- go:embed has nothing to embed otherwise.
+# them. It lands in $(BUILD_DIR) first so a failed or interrupted build
+# never leaves a partial file where go:embed would embed it.
 rask-init:
-	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -modfile raskinit/go.mod -ldflags="-s -w" -o $(RASK_INIT_EMBED).tmp github.com/sivchari/rask/cmd/rask-init
-	mv $(RASK_INIT_EMBED).tmp $(RASK_INIT_EMBED)
+	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -modfile raskinit/go.mod -ldflags="-s -w" -o $(BUILD_DIR)/rask-init github.com/sivchari/rask/cmd/rask-init
+	mv $(BUILD_DIR)/rask-init $(RASK_INIT_EMBED)
 
 # Build
 build:
