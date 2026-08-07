@@ -1,0 +1,78 @@
+name: Verify Release
+
+# Creates a cluster using only what a user actually gets: the published
+# binary and the published agent image. Nothing is built here.
+#
+# Smoke E2E cannot cover this. It builds the agent image locally
+# (--build-local), so it passes whether or not the image the released
+# binary will pull was ever pushed. v0.1.0 shipped with that image missing
+# and every cluster it created got ImagePullBackOff; this is the check that
+# would have caught it.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to verify (e.g. v0.1.0). Defaults to the latest release.'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify published artifacts
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Resolve the tag to verify
+        id: tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_TAG: ${{ github.event.release.tag_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          TAG="${EVENT_TAG:-$INPUT_TAG}"
+
+          if [ -z "$TAG" ]; then
+            TAG=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName -q .tagName)
+          fi
+
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "verifying ${TAG}"
+
+      - name: Download the released linux/amd64 binary
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          VERSION="${TAG#v}"
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern "fjord_${VERSION}_linux_amd64.tar.gz"
+          tar xzf "fjord_${VERSION}_linux_amd64.tar.gz"
+          ./fjord --version
+
+      - name: Create a cluster with the published agent image
+        # No --build-local: the agent image must come from the registry,
+        # under the tag the released binary derives from its own version.
+        # sudo, because rask's hostproc substrate supervises the control
+        # plane as host processes owning host networking.
+        run: sudo -E env "PATH=$PATH" ./fjord create cluster --name release-verify
+
+      - name: Assert the published agent image actually runs
+        # rollout status, not "pod exists": ImagePullBackOff is exactly the
+        # failure being guarded against, and it only shows up here. The
+        # timeout is generous because the image build and the release build
+        # race each other, so the image can land seconds after the release.
+        run: |
+          kubectl --context release-verify -n kube-system \
+            rollout status deploy/fjord-agent --timeout=10m
+          kubectl --context release-verify -n kube-system \
+            get deploy fjord-agent -o jsonpath='{.spec.template.spec.containers[0].image}'
+          echo
+
+      - name: Delete the cluster
+        if: always()
+        run: sudo -E env "PATH=$PATH" ./fjord delete cluster --name release-verify || true
