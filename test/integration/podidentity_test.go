@@ -73,14 +73,14 @@ func verifyPodIdentity(t *testing.T, client kubernetes.Interface) {
 }
 
 // createPodIdentityAssociation runs `aws eks create-pod-identity-association`
-// from the host against fjord-agent's EKS API facade (published on
-// agentHostPort by its NodePort Service), the same command real tooling
-// would run to register a ServiceAccount's IAM role.
+// from the host against fjord-agent's EKS API facade, reached through the
+// port-forward tunnel, the same command real tooling would run to register a
+// ServiceAccount's IAM role.
 func createPodIdentityAssociation(t *testing.T) {
 	t.Helper()
 
 	cmd := exec.Command("aws", "eks", "create-pod-identity-association",
-		"--endpoint-url", "http://localhost:"+agentHostPort,
+		"--endpoint-url", agentURLFor(t),
 		"--cluster-name", clusterName,
 		"--namespace", podIdentityNamespace,
 		"--service-account", podIdentitySAName,

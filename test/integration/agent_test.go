@@ -63,14 +63,14 @@ func parsePrincipalOutput(t *testing.T, output string) (accessKeyID, arn string)
 }
 
 // assertCallerIdentity runs `aws sts get-caller-identity` against
-// fjord-agent's fake STS endpoint (published on agentHostPort by its
-// NodePort Service) using accessKeyID as the SigV4 credential, and verifies
-// it resolves to wantArn.
+// fjord-agent's fake STS endpoint, reached through the port-forward tunnel,
+// using accessKeyID as the SigV4 credential, and verifies it resolves to
+// wantArn.
 func assertCallerIdentity(t *testing.T, accessKeyID, wantArn string) {
 	t.Helper()
 
 	cmd := exec.Command("aws", "sts", "get-caller-identity",
-		"--endpoint-url", "http://localhost:"+agentHostPort,
+		"--endpoint-url", agentURLFor(t),
 	)
 	cmd.Env = append(os.Environ(),
 		"AWS_ACCESS_KEY_ID="+accessKeyID,

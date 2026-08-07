@@ -182,7 +182,10 @@ func clusterReadyMessage(opts *createClusterOptions) string {
 	message := fmt.Sprintf("Cluster %q is ready. kubectl context is set to %q.", opts.name, opts.name)
 
 	if opts.enableAuth {
-		message += fmt.Sprintf(" fjord-agent's fake STS API is reachable at %s:%d.", cluster.AgentLoopbackHost, cluster.AgentNodePort)
+		// Deliberately not an address: the cluster's NodePort is only on
+		// this machine's loopback where the host is the node, which is not
+		// true on macOS. `fjord port-forward` works either way.
+		message += fmt.Sprintf(" Run \"fjord port-forward --name %s\" to reach fjord-agent's fake AWS APIs.", opts.name)
 	}
 
 	return message

@@ -135,7 +135,8 @@ kubectl annotate serviceaccount my-sa eks.amazonaws.com/role-arn=arn:aws:iam::00
 **EKS Pod Identity** — associate a ServiceAccount with a role; pods reach credentials through the upstream Pod Identity Agent:
 
 ```console
-aws eks create-pod-identity-association --endpoint-url http://localhost:30080 \
+fjord port-forward                       # in another terminal; prints the address, e.g. http://127.0.0.1:54321
+aws eks create-pod-identity-association --endpoint-url http://127.0.0.1:54321 \
   --cluster-name fjord --namespace default --service-account my-sa \
   --role-arn arn:aws:iam::000000000000:role/my-role
 ```
@@ -163,11 +164,18 @@ The standard access policies map to the built-in Kubernetes roles: `ClusterAdmin
 
 fjord answers the read side of the EKS API, so `aws eks`, `eksctl`, and terraform's `aws_eks_cluster` data source can inspect it like a real cluster:
 
+`fjord port-forward` opens the tunnel these commands go through and prints the address it bound. Keep it running in another terminal:
+
 ```console
-aws eks list-clusters   --endpoint-url http://localhost:30080
-aws eks describe-cluster --name fjord --endpoint-url http://localhost:30080   # version, oidc issuer, networkConfig, accessConfig, ...
-aws eks list-addons     --cluster-name fjord --endpoint-url http://localhost:30080   # coredns, kube-proxy, eks-pod-identity-agent
+fjord port-forward                       # prints e.g. http://127.0.0.1:54321, then blocks
+export FJORD_ENDPOINT=http://127.0.0.1:54321
+
+aws eks list-clusters   --endpoint-url "$FJORD_ENDPOINT"
+aws eks describe-cluster --name fjord --endpoint-url "$FJORD_ENDPOINT"   # version, oidc issuer, networkConfig, accessConfig, ...
+aws eks list-addons     --cluster-name fjord --endpoint-url "$FJORD_ENDPOINT"   # coredns, kube-proxy, eks-pod-identity-agent
 ```
+
+Going through the tunnel rather than the cluster's own NodePort is what makes these work on macOS as well as Linux: on macOS the cluster runs inside a VM, so its ports are not on your machine's loopback.
 
 `describe-addon` reports only the addons fjord actually runs; asking for one it does not (e.g. `vpc-cni`, since fjord's rask substrate provides its own pod networking) returns `ResourceNotFoundException`, matching EKS.
 
