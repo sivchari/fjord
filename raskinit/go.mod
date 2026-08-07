@@ -58,7 +58,7 @@ require (
 	github.com/opencontainers/runtime-spec v1.3.0 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/sirupsen/logrus v1.9.4 // indirect
-	github.com/sivchari/rask v0.1.9 // indirect
+	github.com/sivchari/rask v0.4.1 // indirect
 	github.com/spf13/pflag v1.0.9 // indirect
 	github.com/vishvananda/netlink v1.3.1 // indirect
 	github.com/vishvananda/netns v0.0.5 // indirect
