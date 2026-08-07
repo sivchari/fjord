@@ -35,12 +35,6 @@ const (
 	// names a cluster's context exactly its cluster name.
 	kubeContext = clusterName
 
-	// agentHostPort is the host port fjord-agent's fake STS API and EKS API
-	// facade are published on, matching cluster.AgentNodePort (rask's
-	// hostproc runtime shares the host network namespace, so this NodePort
-	// is reachable directly on the host).
-	agentHostPort = "30080"
-
 	// awsSTSEndpoint is the in-cluster DNS name and port pods reach
 	// fjord-agent's fake STS API through, matching
 	// internal/cluster/agent.go's Service in the kube-system namespace.
@@ -70,11 +64,10 @@ func TestCreateCluster(t *testing.T) {
 		}
 	})
 
-	create := exec.Command(bin, "create", "cluster",
-		"--eks-version", eksVersion,
-		"--name", clusterName,
-		"--build-local",
-	)
+	args := []string{"create", "cluster", "--eks-version", eksVersion, "--name", clusterName}
+	args = append(args, agentImageArgs()...)
+
+	create := exec.Command(bin, args...)
 	// --build-local builds the agent image with `docker build -f
 	// docker/Dockerfile .`, so run from the repository root where that
 	// Dockerfile resolves.
@@ -100,6 +93,10 @@ func TestCreateCluster(t *testing.T) {
 	}
 
 	client := newClient(t)
+
+	// One tunnel for the whole run: the subtests that call the AWS CLI from
+	// the host share it, and it must outlive each of them.
+	startAgentPortForward(t, bin)
 
 	t.Run("V0", func(t *testing.T) {
 		gitVersion := serverGitVersion(t, client)
@@ -198,6 +195,8 @@ func buildCLI(t *testing.T) string {
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("build fjord: %v\n%s", err, out)
 	}
+
+	prepareCLI(t, bin)
 
 	return bin
 }

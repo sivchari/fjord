@@ -110,9 +110,11 @@ func TestClusterReadyMessage(t *testing.T) {
 		want string
 	}{
 		{
-			name: "auth enabled reports the fixed NodePort",
+			// No address: the NodePort is only on this machine's loopback
+			// where the host is the node, which macOS is not.
+			name: "auth enabled points at port-forward, not an address",
 			opts: &createClusterOptions{name: "fjord", enableAuth: true},
-			want: `Cluster "fjord" is ready. kubectl context is set to "fjord". fjord-agent's fake STS API is reachable at 127.0.0.1:30080.`,
+			want: `Cluster "fjord" is ready. kubectl context is set to "fjord". Run "fjord port-forward --name fjord" to reach fjord-agent's fake AWS APIs.`,
 		},
 		{
 			name: "auth disabled omits the endpoint",
