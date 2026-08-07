@@ -1,5 +1,13 @@
 name: Build Agent Image
 
+# The image is tagged from version.go (see the manifest job), so a release --
+# which lands as a version.go bump on main -- has to rebuild it. Without
+# version.go in this list, `fjord` from a release pulls
+# ghcr.io/sivchari/fjord/agent:<its own version>, an image that was never
+# built, and every cluster it creates gets ImagePullBackOff.
+#
+# Tag pushes are deliberately not a trigger: a path-filtered push event never
+# fires for them, so listing tags here only looks like it works.
 on:
   push:
     branches:
@@ -10,8 +18,7 @@ on:
       - internal/authn/**
       - internal/pki/**
       - docker/**
-    tags:
-      - 'v*'
+      - version.go
   workflow_dispatch: {}
 
 permissions:
