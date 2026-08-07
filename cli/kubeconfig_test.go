@@ -241,6 +241,10 @@ func (f *fakeKubeconfigProvider) LoadDockerImage(context.Context, string, string
 	return nil
 }
 
+func (f *fakeKubeconfigProvider) PortForward(context.Context, string, string, string) (string, error) {
+	return "", nil
+}
+
 // raskStyleKubeconfig builds kubeconfig content shaped like the one rask
 // writes for the testClusterContext cluster: the Cluster and Context
 // entries are named exactly testClusterContext, but the AuthInfo entry is

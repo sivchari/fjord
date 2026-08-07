@@ -11,7 +11,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/sivchari/fjord/internal/agent"
-	"github.com/sivchari/fjord/internal/cluster"
 	"github.com/sivchari/fjord/internal/logger"
 )
 
@@ -115,7 +114,18 @@ func runGrantAccessEntry(cmd *cobra.Command, opts *accessEntryOptions) error {
 		return fmt.Errorf("resolve principal %q: %w", opts.principal, err)
 	}
 
-	baseURL := fmt.Sprintf("http://%s:%d/clusters/%s", cluster.AgentLoopbackHost, cluster.AgentNodePort, opts.clusterName)
+	provider, err := newClusterProvider()
+	if err != nil {
+		return err
+	}
+
+	agentURL, stop, err := agentEndpoint(cmd.Context(), provider, opts.clusterName)
+	if err != nil {
+		return err
+	}
+	defer stop()
+
+	baseURL := agentURL + "/clusters/" + opts.clusterName
 
 	if err := createAccessEntry(cmd.Context(), baseURL, principal.ARN, opts.username, opts.groups); err != nil {
 		return err
