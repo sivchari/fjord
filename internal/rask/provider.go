@@ -3,6 +3,7 @@ package rask
 import (
 	"context"
 	"fmt"
+	"runtime"
 
 	raskcluster "github.com/sivchari/rask/pkg/cluster"
 
@@ -22,6 +23,11 @@ var _ clusterprovider.Provider = (*provider)(nil)
 // rask-init binary embedded at build time (see raskinit.go), which rask
 // boots as PID 1 inside the VM it runs a macOS cluster in.
 func NewProvider() (clusterprovider.Provider, error) {
+	raskInit, err := resolveRaskInit(embedded, runtime.GOOS)
+	if err != nil {
+		return nil, err
+	}
+
 	inner, err := raskcluster.NewProvider("", raskcluster.WithRaskInit(raskInit))
 	if err != nil {
 		return nil, fmt.Errorf("new rask provider: %w", err)

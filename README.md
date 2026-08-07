@@ -62,13 +62,12 @@ Two things a macOS cluster needs are settled at build time, not run time:
   anything you build yourself is not.
 - **The VM's PID 1.** rask boots a small `rask-init` binary inside the VM.
   It cannot ship inside rask's Go module, so fjord compiles and embeds it
-  during its own build. The copy checked into this repository is a
-  placeholder.
+  during its own build. It is not in this repository.
 
 Neither is a silent failure: an unsigned binary stops in under two seconds
-naming the `codesign` command to run, and a placeholder `rask-init` is
-rejected when the provider is constructed. Both used to surface minutes later
-as an unexplained VM timeout instead.
+naming the `codesign` command to run, and a build with no `rask-init` is
+rejected when the provider is constructed, naming the step to run. Both used
+to surface minutes later as an unexplained VM timeout instead.
 
 If you do want to build it yourself, do both steps:
 

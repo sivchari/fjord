@@ -7,3 +7,7 @@ research-*.md
 .DS_Store
 /fjord
 /fjord-agent
+
+# Produced by `make rask-init` during the build, never committed: it is a
+# ~47 MB binary. See internal/rask/embedded/README.md.
+/internal/rask/embedded/rask-init
