@@ -83,5 +83,6 @@ func agentURLFor(t *testing.T) string {
 }
 
 // portForwardTimeout bounds how long the tunnel may take to report its
-// address. It is generous because on macOS the request crosses into the VM.
-const portForwardTimeout = 30 * time.Second
+// address. It covers the wait for fjord-agent to answer, which on a cluster
+// created moments ago includes pulling the agent's image.
+const portForwardTimeout = 5 * time.Minute

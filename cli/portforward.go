@@ -42,6 +42,8 @@ machine's loopback. This command works the same either way.`,
 				return err
 			}
 
+			logger.V(0).Infof("Waiting for fjord-agent in cluster %q ...", name)
+
 			url, stop, err := agentEndpoint(cmd.Context(), provider, name)
 			if err != nil {
 				return err
