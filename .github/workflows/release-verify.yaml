@@ -66,10 +66,13 @@ jobs:
         # failure being guarded against, and it only shows up here. The
         # timeout is generous because the image build and the release build
         # race each other, so the image can land seconds after the release.
+        #
+        # sudo again: create wrote the kubeconfig as root, so only root can
+        # read it back.
         run: |
-          kubectl --context release-verify -n kube-system \
+          sudo -E env "PATH=$PATH" kubectl --context release-verify -n kube-system \
             rollout status deploy/fjord-agent --timeout=10m
-          kubectl --context release-verify -n kube-system \
+          sudo -E env "PATH=$PATH" kubectl --context release-verify -n kube-system \
             get deploy fjord-agent -o jsonpath='{.spec.template.spec.containers[0].image}'
           echo
 
