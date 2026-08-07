@@ -21,6 +21,16 @@ type Provider interface {
 	// LoadDockerImage saves the local docker image imageRef and loads it
 	// onto every node of the cluster named name.
 	LoadDockerImage(ctx context.Context, name, imageRef string) error
+	// PortForward opens a TCP tunnel from localAddr on this machine to
+	// remoteAddr as seen from inside the cluster named name, returning the
+	// address actually bound (localAddr may name port 0 to let the OS
+	// choose). The tunnel lives until ctx is canceled.
+	//
+	// A host process cannot assume it can dial the cluster's own
+	// 127.0.0.1:<NodePort>: that holds only where the host is the node.
+	// Where the cluster runs inside a VM it does not, and this is the way
+	// through.
+	PortForward(ctx context.Context, name, localAddr, remoteAddr string) (boundAddr string, err error)
 }
 
 // CreateOptions configures Provider.CreateCluster.

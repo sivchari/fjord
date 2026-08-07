@@ -115,3 +115,16 @@ func (p *provider) KubeConfig(name string) (string, error) {
 
 	return string(data), nil
 }
+
+// PortForward implements clusterprovider.Provider. rask's own PortForward
+// reports fatal listener errors on a channel; those only matter while the
+// tunnel is up, and a caller that has already stopped using it has nothing
+// to do with them, so the channel is dropped once the tunnel is bound.
+func (p *provider) PortForward(ctx context.Context, name, localAddr, remoteAddr string) (string, error) {
+	bound, _, err := p.inner.PortForward(ctx, name, localAddr, remoteAddr)
+	if err != nil {
+		return "", fmt.Errorf("port forward %s -> %s for cluster %q: %w", localAddr, remoteAddr, name, err)
+	}
+
+	return bound, nil
+}
